@@ -13,12 +13,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from main import run_pipeline
 from src.config import load_config
 
+import sys
+
+# Force immediate unbuffered stdout/stderr for real-time live logs on Google Colab
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 app = FastAPI(title="Statcut Analytics - Football Match Analysis API (18-Stage Pipeline)")
 
-# Allow React dev server (port 5173) + any local origin
+# Allow all origins for seamless Ngrok and local dev connectivity
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
