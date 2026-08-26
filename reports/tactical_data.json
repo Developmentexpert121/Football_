@@ -1,0 +1,74 @@
+{
+  "formations": {
+    "team_0": "4-4-2",
+    "team_1": "4-4-1-1"
+  },
+  "defensive_line_height": {
+    "team_0": 36.6,
+    "team_1": 42.8
+  },
+  "pressing_intensity": {
+    "avg_players_near_ball": 0.59,
+    "max_players_near_ball": 2
+  },
+  "attacking_zones": {
+    "defensive_third_pct": 33.3,
+    "midfield_third_pct": 35.1,
+    "attacking_third_pct": 31.6
+  },
+  "passing_network": [
+    {
+      "from_player": 6,
+      "to_player": 4,
+      "pass_count": 1,
+      "team": 0
+    },
+    {
+      "from_player": 4,
+      "to_player": 6,
+      "pass_count": 1,
+      "team": 0
+    },
+    {
+      "from_player": 6,
+      "to_player": 3,
+      "pass_count": 1,
+      "team": 0
+    },
+    {
+      "from_player": 3,
+      "to_player": 6,
+      "pass_count": 1,
+      "team": 0
+    },
+    {
+      "from_player": 117,
+      "to_player": 660,
+      "pass_count": 1,
+      "team": 1
+    }
+  ],
+  "touch_counts": {
+    "6": 8,
+    "3": 3,
+    "142": 2,
+    "4": 1,
+    "137": 1,
+    "117": 1,
+    "660": 1
+  },
+  "compactness": {
+    "team_0": 994.3,
+    "team_1": 475.9
+  },
+  "width_depth": {
+    "team_0": {
+      "avg_width_m": 25.5,
+      "avg_depth_m": 71.9
+    },
+    "team_1": {
+      "avg_width_m": 13.8,
+      "avg_depth_m": 54.1
+    }
+  }
+}

@@ -1,0 +1,64 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Python ignorer
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Stubs & Cache
+stubs/*.pkl
+!stubs/.gitkeep
+runs/
+
+# Large Model Weights
+*.pt
+*.onnx
+*.engine
+!models/weights/.gitkeep
+
+# Data input/output videos
+data/input_videos/*.mp4
+data/input_videos/*.avi
+data/output_videos/*.mp4
+!data/input_videos/.gitkeep
+!data/output_videos/.gitkeep
+
+# Generated reports (except templates)
+reports/*.csv
+reports/*.png
+reports/*.html
+!reports/.gitkeep

@@ -1,0 +1,24 @@
+{
+  "possession": {
+    "home": 81.2,
+    "away": 18.8
+  },
+  "xg": {
+    "home": 2.45,
+    "away": 1.05
+  },
+  "pass_accuracy": {
+    "home": 86.0,
+    "away": 81.5
+  },
+  "goals": {
+    "home": 2,
+    "away": 0
+  },
+  "stage_metrics": {
+    "kalman_interpolated_frames": 265,
+    "pose_keypoints_extracted": 1904,
+    "field_lines_detected": 12475,
+    "jersey_numbers_ocr": 1
+  }
+}

@@ -1,0 +1,194 @@
+# ==============================================================================
+# FOOTBALL MATCH VIDEO ANALYSIS SYSTEM - 18-STAGE PIPELINE CONFIGURATION
+# ==============================================================================
+
+# Project & Path Settings
+project:
+  name: "Football Match Video Analysis System"
+  version: "2.0.0"
+
+paths:
+  input_video: "data/input_videos/match_01.mp4"
+  output_video: "data/output_videos/match_01_annotated.mp4"
+  model_weights: "models/weights/best.pt"
+  fallback_weights: "yolov8x.pt"
+  stubs_dir: "stubs"
+  reports_dir: "reports"
+
+# 1. Video Ingestion & Processing
+video:
+  target_fps: 25
+  process_width: 1280
+  process_height: 720
+
+# 2. Scene Filter (Replay & Crowd Skipping)
+scene_filter:
+  enabled: true
+  green_ratio_threshold: 0.35
+  hsv_green_min: [35, 40, 40]
+  hsv_green_max: [85, 255, 255]
+
+# 3. Object Detection (YOLO)
+detector:
+  confidence_threshold: 0.25
+  iou_threshold: 0.45
+  device: "auto" # 'cuda', 'cpu', or 'auto'
+  classes:
+    0: "player"
+    1: "goalkeeper"
+    2: "referee"
+    3: "ball"
+
+# Roboflow Model & API Integration
+roboflow:
+  api_key: "0nftOqorJvMmYDDeFhON"
+  workspace: null
+  project: null
+  version: null
+
+# 4. Multi-Object Tracking (ByteTrack)
+tracker:
+  track_high_thresh: 0.5
+  track_low_thresh: 0.1
+  new_track_thresh: 0.6
+  track_buffer: 60
+  match_thresh: 0.8
+
+# 5. Team Assignment (K-Means Clustering)
+team_assigner:
+  n_clusters: 2
+  torso_crop_top: 0.0
+  torso_crop_bottom: 0.40
+  mask_grass: true
+
+# 6. Camera Motion Estimation (Optical Flow)
+camera_movement:
+  enabled: true
+  max_corners: 200
+  quality_level: 0.3
+  min_distance: 7
+  block_size: 7
+
+# 7. Perspective Transform (Homography)
+pitch:
+  length_meters: 105.0
+  width_meters: 68.0
+  # Default homography points (image pixels -> metric pitch meters)
+  # Standard pitch corner / line mappings
+  reference_points_image:
+    - [200, 150] # Top-Left Pitch Corner
+    - [1080, 150] # Top-Right Pitch Corner
+    - [1200, 680] # Bottom-Right Pitch Corner
+    - [80, 680] # Bottom-Left Pitch Corner
+  reference_points_pitch:
+    - [0.0, 0.0]
+    - [105.0, 0.0]
+    - [105.0, 68.0]
+    - [0.0, 68.0]
+
+# 8A. Enhanced Ball Tracking (Kalman Filter)
+ball_tracker:
+  max_lost_frames: 15
+  process_noise: 5.0
+  measurement_noise: 10.0
+
+# 8C. Priority Jersey Number OCR Engine (VLM)
+jersey_ocr:
+  enabled: true
+  backend: "smolvlm2"
+  smolvlm2_model: "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+  sample_every_n_frames: 10
+
+# 8C. Pose Estimation (YOLOv8 Pose)
+pose:
+  enabled: true
+  model_path: "yolov8n-pose.pt"
+  confidence_threshold: 0.3
+  process_every_n: 8  # Run pose every N frames for speed
+
+# 8D. Field Line Detection (OpenCV)
+field_detector:
+  enabled: true
+  sample_every_n: 15
+  canny_low: 50
+  canny_high: 150
+  hough_threshold: 80
+  min_line_length: 80
+  max_line_gap: 30
+
+# 9. Analytics Engine Settings (Enhanced)
+analytics:
+  fps: 25
+  smoothing_window: 7 # Frames for trajectory moving average filter
+  possession_proximity_meters: 2.0 # Distance to ball to claim possession
+  sprint_speed_thresh_kmh: 25.0 # Speed above which counts as sprint
+  high_accel_thresh: 3.0 # m/s² for "high acceleration" event
+  speed_categories:
+    standing: 0.5
+    walking: 2.0
+    running: 5.5
+    sprinting: 7.0 # > 7.0 m/s (~25 km/h)
+
+# 10. Action Recognition (Pose + Speed Rules)
+action_recognition:
+  kick_ankle_velocity_thresh: 40.0
+  kick_leg_angle_thresh: 140.0
+  tackle_hip_ground_ratio: 0.75
+  header_ball_head_dist_px: 60.0
+  dribble_ball_dist_m: 2.0
+
+# 11. Tactical Analysis
+tactical:
+  pressing_radius_m: 5.0
+  possession_radius_m: 2.0
+
+# 12. Event Detection Settings (2.5D Hybrid Footprint + Pixel Polygon Engine)
+event_detector:
+  foul_player_distance_meters: 1.2
+  foul_ball_decel_threshold: 0.5
+  foul_stoppage_seconds: 1.0
+  card_referee_distance_meters: 1.5
+  card_interaction_seconds: 2.0
+  goal_line_thresh_m: 1.8
+  goal_mouth_width_m: 7.32
+  corner_area_radius_m: 5.0
+  shot_velocity_thresh_ms: 8.0
+  offside_margin_m: 0.5
+  # 2.5D Goal Polygon Image Space Coordinates (Calibrated for standard broadcast cameras)
+  # [Left_Post_Base, Right_Post_Base, Right_Post_Top, Left_Post_Top]
+  left_goal_polygon:
+    - [180, 580]   # P1: Left Post Base
+    - [480, 420]   # P2: Right Post Base
+    - [480, 260]   # P3: Right Post Top (Crossbar)
+    - [180, 250]   # P4: Left Post Top (Crossbar)
+  right_goal_polygon:
+    - [700, 440]   # P1: Left Post Base
+    - [1020, 600]  # P2: Right Post Base
+    - [1020, 260]  # P3: Right Post Top (Crossbar)
+    - [700, 270]   # P4: Left Post Top (Crossbar)
+  consecutive_goal_frames: 2
+
+# 13. LLM Reporter (Ollama - Optional)
+llm_reporter:
+  enabled: true
+  model_name: null  # Auto-select from available models
+  ollama_url: "http://localhost:11434"
+  temperature: 0.7
+  max_tokens: 1024
+
+# 14. Visualization Settings (Enhanced)
+visualization:
+  draw_boxes: true
+  draw_trajectories: true
+  draw_mini_map: true
+  draw_pose: true
+  draw_actions: true
+  draw_jersey: true
+  mini_map_width: 280
+  mini_map_height: 180
+  colors:
+    team_a: [255, 50, 50]    # Red
+    team_b: [50, 50, 255]    # Blue
+    referee: [255, 255, 0]   # Yellow
+    goalkeeper: [0, 255, 0]  # Green
+    ball: [0, 255, 255]      # Cyan

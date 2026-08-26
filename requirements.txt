@@ -1,0 +1,44 @@
+# Core Python Dependencies for Football Match Video Analysis System (18-Stage Pipeline)
+
+# Computer Vision & Image Processing
+opencv-python>=4.9.0
+numpy>=1.24.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+pillow>=9.5.0
+
+# Deep Learning & Object Detection
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.1.0
+
+# Jersey Number OCR (Core Priority Engine)
+paddlepaddle>=2.5.0
+paddleocr>=2.7.0
+
+# Tracking & Analytics
+pandas>=2.0.0
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# Visualization & Reporting
+matplotlib>=3.7.0
+plotly>=5.15.0
+
+# Testing
+pytest>=7.3.0
+
+# Web Server & API
+fastapi>=0.110.0
+uvicorn>=0.28.0
+python-multipart>=0.0.9
+jinja2>=3.1.0
+
+# LLM Report Generation (Optional — requires Ollama server)
+# Install separately: pip install ollama
+# ollama>=0.4.0
+transformers
+easyocr
+torch
+Pillow
+python-dotenv

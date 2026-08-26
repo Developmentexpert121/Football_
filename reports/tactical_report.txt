@@ -1,0 +1,43 @@
+============================================================
+TACTICAL ANALYSIS REPORT
+============================================================
+
+Team A Formation: 4-4-2
+
+Team B Formation: 4-4-1-1
+Team A Defensive Line Height: 36.6m from own goal
+Team B Defensive Line Height: 42.8m from own goal
+
+Pressing Intensity: Avg 0.6 players near ball
+  Max simultaneous press: 2 players
+
+Ball Position by Third:
+  Defensive: 33.3%
+  Midfield:  35.1%
+  Attacking: 31.6%
+
+Team A Shape:
+  Compactness (hull area): 994.3 m²
+  Average width: 25.5m
+  Average depth: 71.9m
+
+Team B Shape:
+  Compactness (hull area): 475.9 m²
+  Average width: 13.8m
+  Average depth: 54.1m
+
+Top Passing Connections:
+  Player #6 → Player #4: 1 passes
+  Player #4 → Player #6: 1 passes
+  Player #6 → Player #3: 1 passes
+  Player #3 → Player #6: 1 passes
+  Player #117 → Player #660: 1 passes
+
+Most Touches:
+  Player #6: 8 touches
+  Player #3: 3 touches
+  Player #142: 2 touches
+  Player #4: 1 touches
+  Player #137: 1 touches
+
+============================================================
