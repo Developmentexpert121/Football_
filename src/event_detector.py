@@ -225,7 +225,9 @@ class EventDetector:
                         else:
                             scoring_team = 1 if is_goal_left else 0
                         
-                        scorer_desc = f" | Scorer: Player #{jersey_map.get(scorer_id, scorer_id)}" if scorer_id is not None else ""
+                        conceding_team = 1 - scoring_team
+                        scorer_j = jersey_map.get(scorer_id, scorer_id) if scorer_id else "Unknown"
+                        scorer_desc = f" | Goal Scored by Team {scoring_team + 1} (Player #{scorer_j}) | Conceded by Team {conceding_team + 1}"
                         
                         # Prevent duplicate goals from slow-motion replays or camera angle cuts
                         # A new goal requires at least 20 seconds cooldown OR kickoff reset
@@ -241,12 +243,14 @@ class EventDetector:
                                 'event_type': 'Goal',
                                 'players_involved': [scorer_id] if scorer_id else [],
                                 'teams_involved': [scoring_team],
+                                'conceding_team': conceding_team,
                                 'confidence': conf,
                                 'description': desc + scorer_desc
                             })
-                            team_label = "Team White / Team B" if scoring_team == 1 else "Team Red / Team A"
                             print(f"\n⚽ [EVENT DETECTOR] GOAL CONFIRMED at {timestamp_str} (Frame {frame_idx})!")
-                            print(f"   -> Scoring Team: {team_label} | Scorer: Player #{jersey_map.get(scorer_id, scorer_id) if scorer_id else 'Unknown'} | {desc}\n")
+                            print(f"   -> 🏆 SCORING TEAM: Team {scoring_team + 1} | Scorer: Player #{scorer_j}")
+                            print(f"   -> 🛡️ DEFENDING / CONCEDING TEAM: Team {conceding_team + 1}")
+                            print(f"   -> Details: {desc}\n")
                 else:
                     self._goal_streak = 0
 

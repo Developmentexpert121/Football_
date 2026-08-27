@@ -123,28 +123,53 @@ class TeamAssigner:
         """Returns human-readable name for a team (e.g. 'Team Red', 'Team White')."""
         return self.team_names.get(team_id, f"Team {team_id + 1}")
 
+    def _classify_bgr_color_name(self, bgr: Tuple[int, int, int]) -> str:
+        """Classifies a team's representative BGR kit color into human-readable names."""
+        b, g, r = bgr
+        bgr_pixel = np.uint8([[[b, g, r]]])
+        hsv = cv2.cvtColor(bgr_pixel, cv2.COLOR_BGR2HSV)[0][0]
+        h, s, v = int(hsv[0]), int(hsv[1]), int(hsv[2])
+
+        # Light / White kits (high brightness, low saturation)
+        if s < 50 and v > 140:
+            return "Team White"
+        # Dark / Black kits (very low brightness)
+        if v < 55:
+            return "Team Black"
+        # Neutral Grey kits
+        if s < 45 and 55 <= v <= 140:
+            return "Team Grey"
+
+        # Color hues in OpenCV HSV space (0-180)
+        if h <= 10 or h >= 165:
+            return "Team Red"
+        elif 11 <= h <= 25:
+            return "Team Orange"
+        elif 26 <= h <= 38:
+            return "Team Yellow"
+        elif 39 <= h <= 85:
+            return "Team Green"
+        elif 86 <= h <= 105:
+            return "Team Cyan"
+        elif 106 <= h <= 135:
+            return "Team Blue"
+        elif 136 <= h <= 164:
+            return "Team Purple"
+
+        return "Team Red" if r > b else "Team Blue"
+
     def _name_teams_from_colors(self):
-        """Generates friendly team names based on cluster BGR color profile."""
-        for team_id, bgr in self.team_colors.items():
-            b, g, r = bgr
-            if r > 160 and g > 160 and b > 160:
-                self.team_names[team_id] = "Team White"
-            elif r > 150 and r > g + 40 and r > b + 40:
-                self.team_names[team_id] = "Team Red"
-            elif b > 150 and b > r + 30:
-                self.team_names[team_id] = "Team Blue"
-            elif g > 150 and g > r + 30:
-                self.team_names[team_id] = "Team Green"
-            elif r > 150 and g > 150 and b < 100:
-                self.team_names[team_id] = "Team Yellow"
-            else:
-                self.team_names[team_id] = "Team A" if team_id == 0 else "Team B"
-                
-        # Ensure symmetric naming scheme
-        names = list(self.team_names.values())
-        if "Team A" in names or "Team B" in names:
-            self.team_names[0] = "Team A"
-            self.team_names[1] = "Team B"
+        """Generates friendly jersey color names based on cluster color profiles."""
+        name_0 = self._classify_bgr_color_name(self.team_colors.get(0, (50, 50, 255)))
+        name_1 = self._classify_bgr_color_name(self.team_colors.get(1, (255, 100, 50)))
+
+        # If both ended up with same color, differentiate them
+        if name_0 == name_1:
+            self.team_names[0] = f"{name_0} (1)"
+            self.team_names[1] = f"{name_1} (2)"
+        else:
+            self.team_names[0] = name_0
+            self.team_names[1] = name_1
 
     def _extract_chest_color(self, frame: np.ndarray, bbox: List[float]) -> Optional[np.ndarray]:
         """
