@@ -332,7 +332,11 @@ def run_pipeline(
         draw_jersey=cfg.get("visualization.draw_jersey", True)
     )
 
-    annotated_frames = []
+    # Initialize VideoWriter for streaming frame-by-frame disk write (prevents RAM buffering)
+    h_out, w_out = action_frames[0].shape[:2]
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(output_video_path, fourcc, float(video_io.fps), (w_out, h_out))
+
     player_stats = analytics_results.get('player_stats', {})
     
     # Attach identified jersey numbers to player_stats
@@ -385,10 +389,10 @@ def run_pipeline(
             match_score=(cum_score_a, cum_score_b),
             team_names=(team_a_name, team_b_name)
         )
-        annotated_frames.append(ann)
+        writer.write(ann)
 
-    # Save output video
-    VideoIO.save_video(output_video_path, annotated_frames, fps=video_io.fps)
+    writer.release()
+    print(f"✅ [Stage 14/14] Annotated Video saved successfully to: {output_video_path}")
 
     # Compute summary stats of the 18-stage pipeline
     interpolated_ball_frames = sum(1 for b in smoothed_ball_per_frame if b is not None and b.get('interpolated', False))
