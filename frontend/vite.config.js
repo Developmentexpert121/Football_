@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://noted-mere-awesome-broker.trycloudflare.com',
+        target: 'https://conditions-unix-charitable-bra.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'https://noted-mere-awesome-broker.trycloudflare.com',
+        target: 'https://conditions-unix-charitable-bra.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
