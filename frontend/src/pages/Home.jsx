@@ -240,8 +240,13 @@ function UploadZone({ onStartAnalysis }) {
         ${dragging ? 'border-[#00d4ff]/60 glow-blue scale-[1.01]' : ''}`}
       style={{ minHeight: 280 }}
     >
-      <input ref={inputRef} type="file" accept=".mp4,.avi,.mov,.mkv" className="hidden"
-        onChange={e => handleUploadFile(e.target.files[0])}/>
+      <input ref={inputRef} type="file" accept=".mp4,.avi,.mov,.mkv,.webm,.flv,.ts,.3gp" className="hidden"
+        onChange={e => {
+          if (e.target.files[0]) {
+            handleUploadFile(e.target.files[0])
+            e.target.value = ''
+          }
+        }}/>
 
       {uploading ? (
         <div className="flex flex-col items-center gap-4 w-full max-w-xs">
