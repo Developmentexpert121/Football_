@@ -108,7 +108,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     """
     Endpoint to upload match video clip (.mp4, .avi, .mov) and launch 18-stage analysis pipeline.
     """
-    allowed_exts = [".mp4", ".avi", ".mov", ".mkv"]
+    allowed_exts = [".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".m4v", ".ts", ".3gp"]
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in allowed_exts:
         raise HTTPException(status_code=400, detail=f"Unsupported file format '{ext}'. Use .mp4, .avi, or .mov")

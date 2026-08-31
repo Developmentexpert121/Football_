@@ -197,6 +197,10 @@ function UploadZone({ onStartAnalysis }) {
 
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: form })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.detail || `Upload failed with HTTP ${res.status}`)
+      }
       const data = await res.json()
       clearInterval(timer)
       setUploadPercent(100)
@@ -219,10 +223,10 @@ function UploadZone({ onStartAnalysis }) {
       setTimeout(() => {
         onStartAnalysis(id)
       }, 400)
-    } catch {
+    } catch (err) {
       clearInterval(timer)
       setUploading(false)
-      alert('Upload failed. Please ensure the backend server is running.')
+      alert(`Upload failed: ${err.message || 'Please ensure your Colab GPU server is running.'}`)
     }
   }
 
