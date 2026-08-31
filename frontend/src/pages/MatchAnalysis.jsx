@@ -64,29 +64,18 @@ export default function MatchAnalysis() {
   const [downloading, setDownloading] = useState(false)
   const videoRef = useRef()
 
-  const handleDownloadVideo = async (targetUrl) => {
+  const handleDownloadVideo = (targetUrl) => {
     if (!targetUrl) return
-    setDownloading(true)
     const filename = targetUrl.split('/').pop() || `match_${jobId}_annotated.mp4`
     const downloadEndpoint = `/api/download/${filename}`
-    try {
-      const res = await fetch(downloadEndpoint)
-      if (!res.ok) throw new Error('Failed to fetch video binary')
-      const blob = await res.blob()
-      const blobUrl = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = blobUrl
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      window.URL.revokeObjectURL(blobUrl)
-    } catch (err) {
-      console.warn("Direct blob download failed, opening in new tab:", err)
-      window.open(targetUrl, '_blank')
-    } finally {
-      setDownloading(false)
-    }
+    
+    // Direct attachment trigger -> opens native browser download manager instantly
+    const link = document.createElement('a')
+    link.href = downloadEndpoint
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
   const loadCompletedData = async () => {
