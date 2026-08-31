@@ -18,8 +18,202 @@ All detection is rule-based from ball trajectory + player positions + field geom
 No additional model required.
 """
 
+import cv2
 import numpy as np
+import os
+from collections import deque
 from typing import List, Dict, Any, Tuple, Optional
+
+
+class BallTrajectoryBuffer:
+    """
+    Maintains a rolling window of ball states (pixel pos + ground pos +
+    bbox size) so we can:
+      1. Save ±N frames around a confirmed goal (clip evidence).
+      2. Extrapolate trajectory into goal when ball is occluded.
+      3. Estimate airborne height from apparent diameter shrinkage.
+    """
+
+    WINDOW = 15          # keep last 15 frames (±5 @ 25fps with headroom)
+    CROSSBAR_H_M = 2.44  # FIFA crossbar height in metres
+    BALL_DIAM_M  = 0.22  # FIFA ball diameter in metres
+
+    def __init__(self, ground_diameter_px: float = 28.0):
+        """
+        ground_diameter_px: calibrated pixel diameter of the ball
+        when it is rolling on the pitch centre.
+        """
+        self._buf: deque = deque(maxlen=self.WINDOW)
+        self.ground_diam_px = ground_diameter_px  # D_ground
+
+    def push(self, frame_idx: int,
+             ball_px: Optional[Tuple[float, float]],
+             ground_pos: Optional[Tuple[float, float]],
+             bbox: Optional[Tuple[float, float, float, float]]):
+        """
+        Call once per frame inside detect_events BEFORE the goal check.
+        bbox = (x1, y1, x2, y2) in pixel space.
+        """
+        diam_px = None
+        if bbox is not None:
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+            diam_px = (w + h) / 2.0   # average of width & height
+
+        self._buf.append({
+            'frame_idx': frame_idx,
+            'ball_px':   ball_px,
+            'ground':    ground_pos,
+            'diam_px':   diam_px,
+        })
+
+    def estimate_height_m(self) -> float:
+        """
+        Estimate ball height above ground (Z) from apparent diameter
+        shrinkage vs the ground-level calibration diameter.
+        """
+        if not self._buf:
+            return 0.0
+        latest = self._buf[-1]
+        if latest['ball_px'] is None:
+            return 0.0
+        d = latest['diam_px']
+        if d is None or d <= 0 or self.ground_diam_px <= 0:
+            return 0.0
+
+        ratio = self.ground_diam_px / d
+        K = 1.5   # tune for camera rig
+        z_est = max(0.0, (ratio - 1.0) * K)
+        return min(z_est, self.CROSSBAR_H_M + 0.30)   # 30 cm tolerance
+
+    def is_airborne(self) -> bool:
+        return self.estimate_height_m() > 0.25   # >25 cm off ground
+
+    def extrapolate_will_cross(self, goal_line_x: float,
+                                goal_y_min: float, goal_y_max: float,
+                                look_ahead: int = 7) -> Tuple[bool, float]:
+        """
+        Fit a linear trajectory through the last 5 ground positions and
+        check whether it crosses the goal line within `look_ahead` frames.
+
+        Returns (will_cross: bool, confidence: float 0-1).
+        """
+        pts = [(e['ground'][0], e['ground'][1])
+               for e in self._buf
+               if e['ground'] is not None]
+
+        if len(pts) < 3:
+            return False, 0.0
+
+        pts = pts[-5:]   # use last 5 valid positions
+        xs = np.array([p[0] for p in pts], dtype=float)
+        ys = np.array([p[1] for p in pts], dtype=float)
+        t  = np.arange(len(xs), dtype=float)
+
+        try:
+            vx = float(np.polyfit(t, xs, 1)[0])   # dx per frame
+            vy = float(np.polyfit(t, ys, 1)[0])   # dy per frame
+        except Exception:
+            return False, 0.0
+
+        if abs(vx) < 1e-4:
+            return False, 0.0
+
+        frames_to_line = (goal_line_x - xs[-1]) / vx
+        if not (0 < frames_to_line <= look_ahead):
+            return False, 0.0
+
+        y_at_line = ys[-1] + vy * frames_to_line
+        if not (goal_y_min <= y_at_line <= goal_y_max):
+            return False, 0.0
+
+        confidence = 1.0 - (frames_to_line / look_ahead)
+        return True, round(confidence, 2)
+
+    def get_window_frames(self, goal_frame_idx: int,
+                          half_window: int = 5) -> List[Dict]:
+        """
+        Return buffered entries within ±half_window of goal_frame_idx.
+        """
+        lo = goal_frame_idx - half_window
+        hi = goal_frame_idx + half_window
+        return [e for e in self._buf if lo <= e['frame_idx'] <= hi]
+
+
+class NetRippleDetector:
+    """
+    Detects net motion (optical flow magnitude spike) inside a
+    configurable ROI around each goalmouth.
+    """
+
+    SPIKE_RATIO   = 3.0   # motion must be 3× baseline to count
+    SPIKE_ABS_MIN = 1.0   # absolute flow magnitude floor
+    BUFFER_LEN    = 12    # rolling history window (frames)
+
+    def __init__(self, left_roi: Tuple[int,int,int,int],
+                       right_roi: Tuple[int,int,int,int]):
+        self.rois = {'left': left_roi, 'right': right_roi}
+        self._prev_gray: Optional[np.ndarray] = None
+        self._history: Dict[str, deque] = {
+            'left':  deque(maxlen=self.BUFFER_LEN),
+            'right': deque(maxlen=self.BUFFER_LEN),
+        }
+
+    def update(self, frame_bgr: np.ndarray,
+               side: str) -> float:
+        """
+        Call every frame. Returns ripple confidence ∈ [0, 1].
+        `side` = 'left' | 'right'
+        """
+        if frame_bgr is None or frame_bgr.size == 0:
+            return 0.0
+
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+
+        if self._prev_gray is None or self._prev_gray.shape != gray.shape:
+            self._prev_gray = gray.copy()
+            return 0.0
+
+        x1, y1, x2, y2 = self.rois[side]
+        h, w = gray.shape[:2]
+        x1 = max(0, min(x1, w - 1))
+        x2 = max(x1 + 1, min(x2, w))
+        y1 = max(0, min(y1, h - 1))
+        y2 = max(y1 + 1, min(y2, h))
+
+        curr_roi = gray[y1:y2, x1:x2]
+        prev_roi = self._prev_gray[y1:y2, x1:x2]
+
+        if curr_roi.size == 0 or prev_roi.size == 0:
+            self._prev_gray = gray.copy()
+            return 0.0
+
+        # Farneback dense optical flow on the net ROI
+        flow = cv2.calcOpticalFlowFarneback(
+            prev_roi, curr_roi,
+            None,
+            pyr_scale=0.5, levels=3, winsize=15,
+            iterations=3, poly_n=5, poly_sigma=1.2, flags=0
+        )
+        mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+        score = float(np.mean(mag))
+
+        self._prev_gray = gray.copy()
+        hist = self._history[side]
+        hist.append(score)
+
+        if len(hist) < 4:
+            return 0.0
+
+        recent  = max(list(hist)[-3:])
+        baseline = float(np.mean(list(hist)[:-3])) if len(hist) > 3 else 0.0
+
+        spike = (recent > baseline * self.SPIKE_RATIO and
+                 recent > self.SPIKE_ABS_MIN)
+
+        if spike:
+            return min(1.0, recent / 5.0)   # normalised confidence
+        return 0.0
 
 
 class EventDetector:
@@ -43,7 +237,10 @@ class EventDetector:
         offside_margin: float = 0.5,
         left_goal_polygon: Optional[List[List[float]]] = None,
         right_goal_polygon: Optional[List[List[float]]] = None,
-        consecutive_goal_frames: int = 2
+        consecutive_goal_frames: int = 2,
+        ball_ground_diameter_px: float = 28.0,
+        left_net_roi: Tuple[int, int, int, int] = (150, 220, 490, 590),
+        right_net_roi: Tuple[int, int, int, int] = (690, 240, 1040, 610)
     ):
         self.fps = fps
         self.foul_dist_thresh = foul_dist_thresh
@@ -58,13 +255,19 @@ class EventDetector:
 
         # 2.5D Hybrid Goalmouth Polygons (Image Space P1, P2, P3, P4)
         self.left_goal_polygon = left_goal_polygon or [
-            [30, 480], [110, 470], [110, 230], [30, 240]
+            [180, 580], [480, 420], [480, 260], [180, 250]
         ]
         self.right_goal_polygon = right_goal_polygon or [
-            [1170, 470], [1250, 480], [1250, 240], [1170, 230]
+            [700, 440], [1020, 600], [1020, 260], [700, 270]
         ]
         self.consecutive_goal_frames = consecutive_goal_frames
         self._goal_streak = 0
+
+        # Goal Detection Upgrade: new components
+        self.ball_buffer = BallTrajectoryBuffer(ground_diameter_px=ball_ground_diameter_px)
+        self.net_ripple = NetRippleDetector(
+            left_roi=left_net_roi, right_roi=right_net_roi
+        )
 
         # Penalty area: 16.5m deep, 40.32m wide (centered)
         self.penalty_area_depth = penalty_area_depth
@@ -86,7 +289,8 @@ class EventDetector:
         team_assignments: Dict[int, int],
         ball_metric_per_frame: Optional[List[Optional[Tuple[float, float]]]] = None,
         jersey_map: Optional[Dict[int, str]] = None,
-        ball_pixels_per_frame: Optional[List[Optional[Tuple[float, float]]]] = None
+        ball_pixels_per_frame: Optional[List[Optional[Tuple[float, float]]]] = None,
+        raw_frames: Optional[List[np.ndarray]] = None
     ) -> List[Dict[str, Any]]:
         """
         Evaluates sequence of frames for all event types.
@@ -176,81 +380,159 @@ class EventDetector:
                                 'description': f"Referee intervention with Player #{p_id} following collision."
                             })
 
-            # ===== 3. 2.5D Hybrid Goal Detection (Footprint + Pixel Polygon + Physics Fusion) =====
+            # ===== 3. Goal Detection (5-Signal Fusion Engine) =====
+
+            # Push ball state into rolling buffer FIRST
+            curr_ball_px   = (ball_pixels_per_frame[frame_idx]
+                              if (ball_pixels_per_frame and
+                                  frame_idx < len(ball_pixels_per_frame))
+                              else None)
+            curr_ball_bbox = None
+            for tr in tracks:
+                if tr['class_id'] == 3:           # ball class
+                    curr_ball_bbox = tuple(tr['bbox'])
+                    break
+
+            self.ball_buffer.push(
+                frame_idx, curr_ball_px, ball_pos, curr_ball_bbox
+            )
+
             if ball_pos is not None:
-                curr_ball_px = ball_pixels_per_frame[frame_idx] if (ball_pixels_per_frame and frame_idx < len(ball_pixels_per_frame)) else None
-                
-                # Check ball velocity vector direction (must be moving toward goal at shot speed)
-                ball_vel = ball_velocities[frame_idx] if (frame_idx < len(ball_velocities) and ball_velocities[frame_idx] is not None) else (0.0, 0.0)
-                bvx, bvy = ball_vel
-                speed_ms = np.sqrt(bvx**2 + bvy**2)
-                
-                # Check Left Goal (Team B attacks left, vx <= 0)
-                is_goal_left, conf_left, desc_left = self._check_goal_hybrid(
-                    ball_pixel=curr_ball_px,
-                    ground_pos=ball_pos,
-                    goal_side='left',
-                    goal_polygon=self.left_goal_polygon,
-                    ball_velocity=ball_vel
+
+                ball_vel = (ball_velocities[frame_idx]
+                            if (frame_idx < len(ball_velocities) and
+                                ball_velocities[frame_idx] is not None)
+                            else (0.0, 0.0))
+
+                # ── Net ripple (needs raw frame) ─────────────
+                net_ripple_left  = 0.0
+                net_ripple_right = 0.0
+                if (raw_frames is not None and
+                        frame_idx < len(raw_frames) and
+                        raw_frames[frame_idx] is not None):
+                    frame_bgr = raw_frames[frame_idx]
+                    net_ripple_left  = self.net_ripple.update(frame_bgr, 'left')
+                    net_ripple_right = self.net_ripple.update(frame_bgr, 'right')
+
+                # ── Trajectory extrapolation ─────────────────
+                traj_right, traj_right_conf = self.ball_buffer.extrapolate_will_cross(
+                    goal_line_x = self.pitch_length - self.goal_line_thresh,
+                    goal_y_min  = self.goal_mouth_y_min,
+                    goal_y_max  = self.goal_mouth_y_max,
                 )
-                
-                # Check Right Goal (Team A attacks right, vx >= 0)
+                traj_left, traj_left_conf = self.ball_buffer.extrapolate_will_cross(
+                    goal_line_x = self.goal_line_thresh,
+                    goal_y_min  = self.goal_mouth_y_min,
+                    goal_y_max  = self.goal_mouth_y_max,
+                )
+
+                # ── Left goal check ──────────────────────────
+                is_goal_left, conf_left, desc_left = self._check_goal_hybrid(
+                    ball_pixel      = curr_ball_px,
+                    ground_pos      = ball_pos,
+                    goal_side       = 'left',
+                    goal_polygon    = self.left_goal_polygon,
+                    ball_velocity   = ball_vel,
+                    ball_bbox       = curr_ball_bbox,
+                    net_ripple_conf = net_ripple_left,
+                    traj_cross_conf = traj_left_conf if traj_left else 0.0,
+                )
+
+                # ── Right goal check ─────────────────────────
                 is_goal_right, conf_right, desc_right = self._check_goal_hybrid(
-                    ball_pixel=curr_ball_px,
-                    ground_pos=ball_pos,
-                    goal_side='right',
-                    goal_polygon=self.right_goal_polygon,
-                    ball_velocity=ball_vel
+                    ball_pixel      = curr_ball_px,
+                    ground_pos      = ball_pos,
+                    goal_side       = 'right',
+                    goal_polygon    = self.right_goal_polygon,
+                    ball_velocity   = ball_vel,
+                    ball_bbox       = curr_ball_bbox,
+                    net_ripple_conf = net_ripple_right,
+                    traj_cross_conf = traj_right_conf if traj_right else 0.0,
                 )
 
                 if is_goal_left or is_goal_right:
                     self._goal_streak += 1
-                    conf = conf_left if is_goal_left else conf_right
-                    desc = desc_left if is_goal_left else desc_right
-                    
+                    conf     = conf_left   if is_goal_left  else conf_right
+                    desc     = desc_left   if is_goal_left  else desc_right
+                    goal_side_str = 'left' if is_goal_left  else 'right'
+
                     if self._goal_streak >= self.consecutive_goal_frames:
-                        # Find shooter (closest player to ball trajectory during shot)
-                        all_players = players_team_0 + players_team_1
-                        scorer_id = None
-                        min_dist_to_ball = 999.0
+                        # ── Shooter attribution ───────────────
+                        all_players   = players_team_0 + players_team_1
+                        scorer_id     = None
+                        min_dist_ball = 999.0
                         for p_id, p_pos in all_players:
-                            dist_p = np.sqrt((p_pos[0] - ball_pos[0])**2 + (p_pos[1] - ball_pos[1])**2)
-                            if dist_p < min_dist_to_ball:
-                                min_dist_to_ball = dist_p
-                                scorer_id = p_id
-                        
-                        # Dynamically assign scoring team from the shooter's team
+                            d = np.sqrt((p_pos[0]-ball_pos[0])**2 +
+                                        (p_pos[1]-ball_pos[1])**2)
+                            if d < min_dist_ball:
+                                min_dist_ball = d
+                                scorer_id     = p_id
+
                         if scorer_id is not None:
-                            scoring_team = team_assignments.get(scorer_id, 1 if is_goal_left else 0)
+                            scoring_team = team_assignments.get(scorer_id,
+                                           1 if is_goal_left else 0)
                         else:
                             scoring_team = 1 if is_goal_left else 0
-                        
+
                         conceding_team = 1 - scoring_team
-                        scorer_j = jersey_map.get(scorer_id, scorer_id) if scorer_id else "Unknown"
-                        scorer_desc = f" | Goal Scored by Team {scoring_team + 1} (Player #{scorer_j}) | Conceded by Team {conceding_team + 1}"
-                        
-                        # Prevent duplicate goals from slow-motion replays or camera angle cuts
-                        # A new goal requires at least 20 seconds cooldown OR kickoff reset
+                        scorer_j = (jersey_map.get(scorer_id, scorer_id)
+                                    if (jersey_map and scorer_id is not None and scorer_id in jersey_map) else (scorer_id if scorer_id is not None else "Unknown"))
+
+                        # ── Cooldown guard ────────────────────
                         recent_goal = any(
-                            abs(e['frame_idx'] - frame_idx) < int(self.fps * 20.0) and e['event_type'] == 'Goal'
+                            abs(e['frame_idx'] - frame_idx) < int(self.fps * 20.0)
+                            and e['event_type'] == 'Goal'
                             for e in events
                         )
                         if not recent_goal:
+
+                            # ── ±5 frame evidence window ──────
+                            evidence_frames = self.ball_buffer.get_window_frames(
+                                frame_idx, half_window=5
+                            )
+                            evidence_summary = [
+                                {
+                                    'frame': e['frame_idx'],
+                                    'ground': (round(e['ground'][0], 2),
+                                               round(e['ground'][1], 2))
+                                    if e['ground'] else None,
+                                    'px': e['ball_px'],
+                                }
+                                for e in evidence_frames
+                            ]
+
+                            scorer_desc = (
+                                f" | Goal Scored by Team {scoring_team+1} "
+                                f"(Player #{scorer_j}) "
+                                f"| Conceded by Team {conceding_team+1}"
+                            )
+
                             events.append({
-                                'frame_idx': frame_idx,
-                                'timestamp': timestamp_str,
-                                'timestamp_seconds': timestamp_sec,
-                                'event_type': 'Goal',
-                                'players_involved': [scorer_id] if scorer_id else [],
-                                'teams_involved': [scoring_team],
-                                'conceding_team': conceding_team,
-                                'confidence': conf,
-                                'description': desc + scorer_desc
+                                'frame_idx':          frame_idx,
+                                'timestamp':          timestamp_str,
+                                'timestamp_seconds':  timestamp_sec,
+                                'event_type':         'Goal',
+                                'players_involved':   [scorer_id] if scorer_id is not None else [],
+                                'teams_involved':     [scoring_team],
+                                'conceding_team':     conceding_team,
+                                'confidence':         conf,
+                                'goal_side':          goal_side_str,
+                                'description':        desc + scorer_desc,
+                                'evidence_frames':    evidence_summary,
+                                'net_ripple_left':    net_ripple_left,
+                                'net_ripple_right':   net_ripple_right,
                             })
-                            print(f"\n⚽ [EVENT DETECTOR] GOAL CONFIRMED at {timestamp_str} (Frame {frame_idx})!")
-                            print(f"   -> 🏆 SCORING TEAM: Team {scoring_team + 1} | Scorer: Player #{scorer_j}")
-                            print(f"   -> 🛡️ DEFENDING / CONCEDING TEAM: Team {conceding_team + 1}")
-                            print(f"   -> Details: {desc}\n")
+
+                            print(
+                                f"\n⚽ [GOAL CONFIRMED] {timestamp_str} "
+                                f"(Frame {frame_idx})\n"
+                                f"   Scoring:   Team {scoring_team+1} | "
+                                f"Player #{scorer_j}\n"
+                                f"   Conceding: Team {conceding_team+1}\n"
+                                f"   Details:   {desc}\n"
+                                f"   Evidence:  {len(evidence_summary)} frames "
+                                f"around goal\n"
+                            )
                 else:
                     self._goal_streak = 0
 
@@ -587,79 +869,186 @@ class EventDetector:
     def point_in_goal_polygon(
         self,
         ball_pixel: Tuple[float, float],
-        polygon: List[List[float]]
+        polygon: List[List[float]],
+        expanded_px: float = 0.0
     ) -> bool:
         """
-        Ray-Casting algorithm to check if a 2D ball pixel (u, v) is inside the
-        goalmouth trapezoid defined by 4 image-space vertices [P1, P2, P3, P4].
+        Ray-Casting (Even-Odd) algorithm.
+        Returns False (safe default) if inputs are invalid.
+
+        `expanded_px`: pixel margin to add to each vertex outward from
+        the polygon centroid. Use 8-12 px for airborne ball tolerance.
         """
-        if not ball_pixel or not polygon or len(polygon) < 3:
-            return True  # Permissive fallback if polygon not specified
-        
+        if (ball_pixel is None or not polygon or len(polygon) < 3):
+            return False
+
         u, v = ball_pixel
-        n = len(polygon)
+
+        pts = np.array(polygon, dtype=float)
+        if expanded_px > 0:
+            centroid = pts.mean(axis=0)
+            directions = pts - centroid
+            norms = np.linalg.norm(directions, axis=1, keepdims=True)
+            norms = np.where(norms == 0, 1, norms)
+            pts = pts + (directions / norms) * expanded_px
+
+        n = len(pts)
         inside = False
-        
-        p1x, p1y = polygon[0]
+        p1x, p1y = pts[0]
         for i in range(1, n + 1):
-            p2x, p2y = polygon[i % n]
+            p2x, p2y = pts[i % n]
             if (v > min(p1y, p2y)) and (v <= max(p1y, p2y)):
                 if p2y != p1y:
-                    x_intersect = (v - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    if u < x_intersect:
+                    x_int = (v - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if u < x_int:
                         inside = not inside
             p1x, p1y = p2x, p2y
-            
+
         return inside
 
     def _check_goal_hybrid(
         self,
-        ball_pixel: Optional[Tuple[float, float]],
-        ground_pos: Tuple[float, float],
-        goal_side: str,  # 'left' or 'right'
-        goal_polygon: Optional[List[List[float]]] = None,
-        ball_velocity: Optional[Tuple[float, float]] = None
+        ball_pixel:      Optional[Tuple[float, float]],
+        ground_pos:      Optional[Tuple[float, float]],
+        goal_side:       str,
+        goal_polygon:    Optional[List[List[float]]] = None,
+        ball_velocity:   Optional[Tuple[float, float]] = None,
+        ball_bbox:       Optional[Tuple[float,float,float,float]] = None,
+        net_ripple_conf: float = 0.0,
+        traj_cross_conf: float = 0.0,
     ) -> Tuple[bool, float, str]:
         """
-        Refined 2.5D Hybrid Geometric & Physics Check:
-          - Condition 1 (Ground Footprint): (X_g, Y_g) crosses physical goal line within goal width.
-          - Condition 2 (Image Pixel Polygon): (u, v) is inside 2D goalmouth polygon (under crossbar & inside posts).
-          - Condition 3 (Velocity Vector): Ball moving toward attacking goal or resting in net.
+        5-signal weighted confidence fusion:
+
+          Signal                  Weight   Source
+          -----------------------------------------
+          Ground footprint          0.25   homography (0.40 if ball_pixel is None)
+          Pixel polygon             0.25   image-space ray-cast
+          Velocity direction        0.15   physics
+          Trajectory extrapolation  0.15   Kalman linear fit
+          Net ripple                0.20   optical flow on net ROI
+
+        Goal confirmed when total_conf >= THRESHOLD (0.55 default).
         """
+        THRESHOLD = 0.55
+
         if ground_pos is None:
             return False, 0.0, ""
 
         X_g, Y_g = ground_pos
-        is_within_width = (self.goal_mouth_y_min <= Y_g <= self.goal_mouth_y_max)
-        
-        if goal_side == 'right':
-            is_past_line = (X_g >= self.pitch_length - self.goal_line_thresh)
-        else:
-            is_past_line = (X_g <= self.goal_line_thresh)
-            
-        cond1_ground = is_past_line and is_within_width
-        
-        # Condition 2: Pixel-Space Point-In-Polygon Check
-        cond2_pixel = False
-        if ball_pixel is not None and goal_polygon is not None:
-            cond2_pixel = self.point_in_goal_polygon(ball_pixel, goal_polygon)
 
-        # Condition 3: Velocity Direction Check (if velocity is present)
-        vel_ok = True
+        # ── ABSOLUTE SPATIAL BOUNDARY GUARD ──────────────────────────
+        # A goal is physically impossible if the ball is in midfield (16.5m < X_g < 88.5m)
+        if goal_side == 'left' and X_g > 16.5:
+            return False, 0.0, ""
+        if goal_side == 'right' and X_g < 88.5:
+            return False, 0.0, ""
+
+        signals: Dict[str, float] = {}
+        reasons:  List[str]       = []
+
+        # ── Estimate ball height ─────────────────────────────
+        z_est = (self.ball_buffer.estimate_height_m()
+                 if hasattr(self, 'ball_buffer') else 0.0)
+        is_airborne = z_est > 0.25
+        airborne_ok = z_est <= (2.44 + 0.30)   # within crossbar height
+
+        # ── SIGNAL 1: Ground footprint ───────────────────────
+        is_within_y = self.goal_mouth_y_min <= Y_g <= self.goal_mouth_y_max
+
+        if goal_side == 'right':
+            is_past_line = X_g >= (self.pitch_length - self.goal_line_thresh)
+        else:
+            is_past_line = X_g <= self.goal_line_thresh
+
+        if is_past_line and is_within_y:
+            if is_airborne:
+                w = 0.15
+            elif ball_pixel is None:
+                w = 0.40
+            else:
+                w = 0.25
+            signals['ground'] = w
+            reasons.append(f"ground({X_g:.1f}m,{Y_g:.1f}m)")
+
+        # ── SIGNAL 2: Pixel polygon (leading-edge check) ─────
+        if ball_pixel is not None and goal_polygon is not None and airborne_ok:
+            if ball_bbox is not None:
+                x1, y1, x2, y2 = ball_bbox
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                if goal_side == 'right':
+                    leading_px = (x2, cy)
+                else:
+                    leading_px = (x1, cy)
+            else:
+                leading_px = ball_pixel
+
+            airborne_expand = min(z_est * 30, 60)
+
+            if is_airborne and airborne_expand > 0:
+                poly_arr = np.array(goal_polygon, dtype=float)
+                top_indices = [2, 3]
+                for ti in top_indices:
+                    poly_arr[ti][1] -= airborne_expand
+                expanded_polygon = poly_arr.tolist()
+            else:
+                expanded_polygon = goal_polygon
+
+            in_poly = self.point_in_goal_polygon(
+                leading_px, expanded_polygon, expanded_px=8.0
+            )
+            if in_poly:
+                signals['pixel'] = 0.25
+                reasons.append("pixel_polygon")
+
+        # ── SIGNAL 3: Velocity direction ─────────────────────
+        vel_veto = False
         if ball_velocity is not None:
             bvx, bvy = ball_velocity
-            if goal_side == 'right' and bvx < -5.0:  # Moving strongly away from right goal
-                vel_ok = False
-            elif goal_side == 'left' and bvx > 5.0:   # Moving strongly away from left goal
-                vel_ok = False
+            if goal_side == 'right':
+                if bvx > -3.0:
+                    signals['velocity'] = 0.15
+                    reasons.append("vel_ok")
+                else:
+                    vel_veto = True
+            else:
+                if bvx < 3.0:
+                    signals['velocity'] = 0.15
+                    reasons.append("vel_ok")
+                else:
+                    vel_veto = True
+        else:
+            signals['velocity'] = 0.08
 
-        # Trigger Goal if:
-        # 1. Ground footprint confirms crossing within width (Condition 1 & 2), OR
-        # 2. 2D visual polygon confirms ball is inside the net when in attacking third
-        if vel_ok and ((cond1_ground and cond2_pixel) or (cond2_pixel and (X_g > self.pitch_length * 0.7 or X_g < self.pitch_length * 0.3)) or (cond1_ground and ball_pixel is None)):
-            conf = 0.95 if ball_pixel is not None else 0.80
-            side_str = "right" if goal_side == "right" else "left"
-            return True, conf, f"2.5D Hybrid Goal ({side_str}): Ground ({X_g:.1f}m, {Y_g:.1f}m)"
-            
-        return False, 0.0, ""
+        # ── SIGNAL 4: Trajectory extrapolation ───────────────
+        if traj_cross_conf > 0.0:
+            signals['trajectory'] = traj_cross_conf * 0.15
+            reasons.append(f"traj({traj_cross_conf:.2f})")
+
+        # ── SIGNAL 5: Net ripple ─────────────────────────────
+        if net_ripple_conf > 0.0:
+            signals['net_ripple'] = net_ripple_conf * 0.20
+            reasons.append(f"net_ripple({net_ripple_conf:.2f})")
+
+        # ── Fuse signals ─────────────────────────────────────
+        total = sum(signals.values())
+
+        if vel_veto and net_ripple_conf < 0.4:
+            total *= 0.25
+            reasons.append("VEL_VETO")
+
+        if (net_ripple_conf > 0.7 and
+                any(v > 0.4 for k, v in signals.items() if k != 'net_ripple')):
+            total = max(total, 0.82)
+            reasons.append("RIPPLE_CONFIRM")
+
+        has_net_evidence = 'ground' in signals or 'pixel' in signals
+        confirmed = total >= THRESHOLD and has_net_evidence
+        side_str  = goal_side
+        desc      = (f"GoalFusion({side_str}): "
+                     f"conf={total:.2f} [{' | '.join(reasons)}] "
+                     f"Z={z_est:.1f}m")
+
+        return confirmed, round(min(total, 1.0), 2), desc
 
