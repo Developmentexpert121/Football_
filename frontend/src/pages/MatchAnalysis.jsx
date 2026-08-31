@@ -158,7 +158,7 @@ export default function MatchAnalysis() {
   const possession = matchData?.possession || { home: 50, away: 50 }
   const goals = matchData?.goals || { home: 0, away: 0 }
   const pass_accuracy = matchData?.pass_accuracy || { home: 80, away: 80 }
-  const video_url = matchData?.video_url
+  const video_url = matchData?.video_url || matchData?.output_video_url || `/media/videos/match_${jobId}_annotated.mp4`
 
   // Filter ONLY active match players who actually participated (removing single-frame noise tracks)
   const activePlayers = players.filter(p => (
