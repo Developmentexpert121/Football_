@@ -6,7 +6,7 @@ import csv
 from typing import Dict, Any
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -143,6 +143,16 @@ async def get_job_status(job_id: str):
     if job_id not in JOBS:
         raise HTTPException(status_code=404, detail="Job ID not found")
     return JOBS[job_id]
+
+@app.get("/api/download/{filename}")
+async def download_video(filename: str):
+    """
+    Direct force-download endpoint with Content-Disposition attachment header.
+    """
+    file_path = os.path.join("data", "output_videos", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"Annotated video '{filename}' not found")
+    return FileResponse(file_path, media_type="video/mp4", filename=filename)
 
 @app.get("/api/results/{job_id}")
 async def get_job_results(job_id: str):

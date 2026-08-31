@@ -61,7 +61,33 @@ export default function MatchAnalysis() {
   const [pipelineProgress, setPipelineProgress] = useState(5)
   const [pipelineStage, setPipelineStage] = useState('Initializing AI Video Pipeline...')
   const [selectedPlayerId, setSelectedPlayerId] = useState(null)
+  const [downloading, setDownloading] = useState(false)
   const videoRef = useRef()
+
+  const handleDownloadVideo = async (targetUrl) => {
+    if (!targetUrl) return
+    setDownloading(true)
+    const filename = targetUrl.split('/').pop() || `match_${jobId}_annotated.mp4`
+    const downloadEndpoint = `/api/download/${filename}`
+    try {
+      const res = await fetch(downloadEndpoint)
+      if (!res.ok) throw new Error('Failed to fetch video binary')
+      const blob = await res.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+    } catch (err) {
+      console.warn("Direct blob download failed, opening in new tab:", err)
+      window.open(targetUrl, '_blank')
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   const loadCompletedData = async () => {
     try {
@@ -261,10 +287,14 @@ export default function MatchAnalysis() {
                     <Sparkles size={12} className="text-[#00d4ff]"/> AI Annotated Video with Bounding Boxes, Speed & Jersey Badges
                   </span>
                   {video_url && (
-                    <a href={video_url} download
-                      className="flex items-center gap-1 text-xs text-[#00d4ff] hover:underline font-semibold">
-                      <Download size={12}/> Download Video (.MP4)
-                    </a>
+                    <button
+                      onClick={() => handleDownloadVideo(video_url)}
+                      disabled={downloading}
+                      className="flex items-center gap-1.5 text-xs bg-[#00d4ff]/10 hover:bg-[#00d4ff]/20 text-[#00d4ff] border border-[#00d4ff]/30 px-3 py-1.5 rounded-lg transition-all font-semibold cursor-pointer disabled:opacity-50"
+                    >
+                      {downloading ? <Loader2 size={13} className="animate-spin"/> : <Download size={13}/>}
+                      {downloading ? 'Downloading...' : 'Download Video (.MP4)'}
+                    </button>
                   )}
                 </div>
               </>
