@@ -76,10 +76,10 @@ pitch:
   # Default homography points (image pixels -> metric pitch meters)
   # Standard pitch corner / line mappings
   reference_points_image:
-    - [200, 150] # Top-Left Pitch Corner
-    - [1080, 150] # Top-Right Pitch Corner
-    - [1200, 680] # Bottom-Right Pitch Corner
-    - [80, 680] # Bottom-Left Pitch Corner
+    - [97, 50]   # Top-Left Pitch Corner
+    - [1182, 50]  # Top-Right Pitch Corner
+    - [1182, 668] # Bottom-Right Pitch Corner
+    - [97, 668]   # Bottom-Left Pitch Corner
   reference_points_pitch:
     - [0.0, 0.0]
     - [105.0, 0.0]
@@ -157,16 +157,19 @@ event_detector:
   # 2.5D Goal Polygon Image Space Coordinates (Calibrated for standard broadcast cameras)
   # [Left_Post_Base, Right_Post_Base, Right_Post_Top, Left_Post_Top]
   left_goal_polygon:
-    - [180, 580]   # P1: Left Post Base
-    - [480, 420]   # P2: Right Post Base
-    - [480, 260]   # P3: Right Post Top (Crossbar)
-    - [180, 250]   # P4: Left Post Top (Crossbar)
+    - [97, 392]    # P1: Left Post Base
+    - [150, 392]   # P2: Right Post Base / Net Depth
+    - [150, 230]   # P3: Right Post Top (Crossbar)
+    - [97, 230]    # P4: Left Post Top (Crossbar)
   right_goal_polygon:
-    - [700, 440]   # P1: Left Post Base
-    - [1020, 600]  # P2: Right Post Base
-    - [1020, 260]  # P3: Right Post Top (Crossbar)
-    - [700, 270]   # P4: Left Post Top (Crossbar)
+    - [1129, 392]  # P1: Left Post Base / Net Depth
+    - [1182, 392]  # P2: Right Post Base
+    - [1182, 230]  # P3: Right Post Top (Crossbar)
+    - [1129, 230]  # P4: Left Post Top (Crossbar)
   consecutive_goal_frames: 2
+  ball_ground_diameter_px: 28.0
+  left_net_roi: [50, 210, 160, 420]
+  right_net_roi: [1120, 210, 1230, 420]
 
 # 13. LLM Reporter (Ollama - Optional)
 llm_reporter:
@@ -184,6 +187,8 @@ visualization:
   draw_pose: true
   draw_actions: true
   draw_jersey: true
+  draw_goal_overlay: true          # Show goalmouth polygon on video when ball is near goal
+  draw_debug_coordinates: false    # Show all calibration points on every frame (for debugging)
   mini_map_width: 280
   mini_map_height: 180
   colors:

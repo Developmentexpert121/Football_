@@ -283,7 +283,10 @@ def run_pipeline(
         goal_line_thresh=cfg.get("event_detector.goal_line_thresh_m", 1.8),
         left_goal_polygon=cfg.get("event_detector.left_goal_polygon", None),
         right_goal_polygon=cfg.get("event_detector.right_goal_polygon", None),
-        consecutive_goal_frames=cfg.get("event_detector.consecutive_goal_frames", 2)
+        consecutive_goal_frames=cfg.get("event_detector.consecutive_goal_frames", 2),
+        ball_ground_diameter_px=cfg.get("event_detector.ball_ground_diameter_px", 28.0),
+        left_net_roi=tuple(cfg.get("event_detector.left_net_roi", [150, 220, 490, 590])),
+        right_net_roi=tuple(cfg.get("event_detector.right_net_roi", [690, 240, 1040, 610]))
     )
     events = event_detector.detect_events(
         tracks_per_frame,
@@ -291,7 +294,8 @@ def run_pipeline(
         team_assignments,
         ball_metric_per_frame=analytics_results.get('ball_metric_per_frame'),
         jersey_map=jersey_map,
-        ball_pixels_per_frame=ball_px_per_frame
+        ball_pixels_per_frame=ball_px_per_frame,
+        raw_frames=action_frames
     )
 
     # Build per-frame event index for visualization
@@ -329,7 +333,14 @@ def run_pipeline(
         pitch_width=cfg.get("pitch.width_meters", 68.0),
         draw_pose=cfg.get("visualization.draw_pose", True),
         draw_actions=cfg.get("visualization.draw_actions", True),
-        draw_jersey=cfg.get("visualization.draw_jersey", True)
+        draw_jersey=cfg.get("visualization.draw_jersey", True),
+        draw_goal_overlay=cfg.get("visualization.draw_goal_overlay", True),
+        draw_debug_coordinates=cfg.get("visualization.draw_debug_coordinates", False),
+        left_goal_polygon=cfg.get("event_detector.left_goal_polygon", None),
+        right_goal_polygon=cfg.get("event_detector.right_goal_polygon", None),
+        left_net_roi=cfg.get("event_detector.left_net_roi", None),
+        right_net_roi=cfg.get("event_detector.right_net_roi", None),
+        reference_points_image=cfg.get("pitch.reference_points_image", None)
     )
 
     # Initialize VideoWriter for streaming frame-by-frame disk write (prevents RAM buffering)
@@ -371,6 +382,10 @@ def run_pipeline(
         frame_actions = actions_per_frame[frame_idx] if frame_idx < len(actions_per_frame) else {}
         frame_ball = smoothed_ball_per_frame[frame_idx] if frame_idx < len(smoothed_ball_per_frame) else None
 
+        # Get ball metric position for goal overlay rendering
+        ball_metric = analytics_results.get('ball_metric_per_frame', [])
+        frame_ball_metric = ball_metric[frame_idx] if frame_idx < len(ball_metric) else None
+
         ann = visualizer.annotate_frame(
             frame,
             tracks,
@@ -387,7 +402,8 @@ def run_pipeline(
             smoothed_ball=frame_ball,
             team_assigner=team_assigner,
             match_score=(cum_score_a, cum_score_b),
-            team_names=(team_a_name, team_b_name)
+            team_names=(team_a_name, team_b_name),
+            ball_metric_pos=frame_ball_metric
         )
         writer.write(ann)
 

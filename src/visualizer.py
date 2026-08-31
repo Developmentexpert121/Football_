@@ -67,7 +67,14 @@ class Visualizer:
         mini_map_h: int = 180,
         draw_pose: bool = True,
         draw_actions: bool = True,
-        draw_jersey: bool = True
+        draw_jersey: bool = True,
+        draw_goal_overlay: bool = True,
+        draw_debug_coordinates: bool = False,
+        left_goal_polygon: Optional[List[List[float]]] = None,
+        right_goal_polygon: Optional[List[List[float]]] = None,
+        left_net_roi: Optional[List[int]] = None,
+        right_net_roi: Optional[List[int]] = None,
+        reference_points_image: Optional[List[List[float]]] = None
     ):
         self.pitch_length = pitch_length
         self.pitch_width = pitch_width
@@ -76,7 +83,33 @@ class Visualizer:
         self.draw_pose = draw_pose
         self.draw_actions = draw_actions
         self.draw_jersey = draw_jersey
-        
+        self.draw_goal_overlay = draw_goal_overlay
+        self.draw_debug_coordinates = draw_debug_coordinates
+
+        # Goal polygon pixel coordinates (image space)
+        self.left_goal_polygon = left_goal_polygon or [
+            [97, 392], [150, 392], [150, 230], [97, 230]
+        ]
+        self.right_goal_polygon = right_goal_polygon or [
+            [1129, 392], [1182, 392], [1182, 230], [1129, 230]
+        ]
+        # Net ROI pixel coordinates [x1, y1, x2, y2]
+        self.left_net_roi = left_net_roi or [50, 210, 160, 420]
+        self.right_net_roi = right_net_roi or [1120, 210, 1230, 420]
+        # Homography reference points (image pixels)
+        self.reference_points_image = reference_points_image
+
+        # Goal mouth metric dimensions (FIFA standard)
+        self.goal_width_m = 7.32       # 7.32m wide
+        self.goal_height_m = 2.44      # 2.44m crossbar height
+        self.goal_depth_m = 2.44       # net depth behind goal line
+        self.goal_y_min_m = (pitch_width - self.goal_width_m) / 2.0   # 30.34m
+        self.goal_y_max_m = (pitch_width + self.goal_width_m) / 2.0   # 37.66m
+
+        # Goal flash animation state
+        self._goal_flash_counter = 0
+        self._goal_flash_side = None
+
         self.color_team_a = (50, 50, 255)   # Red (BGR)
         self.color_team_b = (255, 100, 50)  # Blue (BGR)
         self.color_referee = (0, 255, 255)  # Yellow (BGR)
@@ -99,7 +132,8 @@ class Visualizer:
         smoothed_ball: Optional[Dict[str, Any]] = None,
         team_assigner: Optional[Any] = None,
         match_score: Tuple[int, int] = (0, 0),
-        team_names: Optional[Tuple[str, str]] = None
+        team_names: Optional[Tuple[str, str]] = None,
+        ball_metric_pos: Optional[Tuple[float, float]] = None
     ) -> np.ndarray:
         """
         Draws bounding boxes, IDs, speeds, pose skeletons, action labels,
@@ -299,6 +333,47 @@ class Visualizer:
         if events_this_frame:
             self._draw_event_markers(annotated, events_this_frame, h, w)
 
+        # 8. Draw 3D Goal Polygon Overlay on video frame
+        if self.draw_goal_overlay:
+            has_goal_event = False
+            if events_this_frame:
+                has_goal_event = any(e.get('event_type') == 'Goal' for e in events_this_frame)
+
+            # Trigger goal flash animation
+            if has_goal_event:
+                self._goal_flash_counter = 30  # flash for 30 frames
+                goal_evt = next((e for e in events_this_frame if e.get('event_type') == 'Goal'), None)
+                self._goal_flash_side = goal_evt.get('goal_side', 'left') if goal_evt else 'left'
+
+            # Draw goal polygons when ball is near goal area
+            ball_near_left = False
+            ball_near_right = False
+            if ball_metric_pos is not None:
+                bx = ball_metric_pos[0]
+                ball_near_left = bx < 25.0
+                ball_near_right = bx > (self.pitch_length - 25.0)
+
+            if ball_near_left or self._goal_flash_counter > 0:
+                self._draw_goal_polygon_on_frame(annotated, self.left_goal_polygon, 'LEFT GOAL',
+                                                  is_goal_flash=(self._goal_flash_counter > 0 and self._goal_flash_side == 'left'))
+            if ball_near_right or self._goal_flash_counter > 0:
+                self._draw_goal_polygon_on_frame(annotated, self.right_goal_polygon, 'RIGHT GOAL',
+                                                  is_goal_flash=(self._goal_flash_counter > 0 and self._goal_flash_side == 'right'))
+
+            if self._goal_flash_counter > 0:
+                self._goal_flash_counter -= 1
+                # Draw big "GOAL!" flash banner
+                if self._goal_flash_counter > 15:
+                    overlay_flash = annotated.copy()
+                    cv2.rectangle(overlay_flash, (w // 2 - 160, h // 2 - 40), (w // 2 + 160, h // 2 + 40), (0, 255, 0), -1)
+                    cv2.addWeighted(overlay_flash, 0.4, annotated, 0.6, 0, annotated)
+                    cv2.putText(annotated, "GOAL!", (w // 2 - 100, h // 2 + 18),
+                                cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 255, 255), 4, cv2.LINE_AA)
+
+        # 9. Draw debug coordinate overlay (reference points, goal vertices, net ROIs)
+        if self.draw_debug_coordinates:
+            self._draw_coordinate_debug_overlay(annotated)
+
         return annotated
 
     def _draw_scoreboard(
@@ -485,6 +560,108 @@ class Visualizer:
             cv2.putText(frame, desc, (17, y_offset + 34),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
 
+    def _draw_goal_polygon_on_frame(
+        self,
+        frame: np.ndarray,
+        polygon: List[List[float]],
+        label: str,
+        is_goal_flash: bool = False
+    ):
+        """
+        Draws a semi-transparent goal polygon overlay on the video frame.
+        Shows the goal mouth zone so viewers can see where the ball enters.
+        P1=base-left, P2=base-right, P3=top-right(crossbar), P4=top-left(crossbar)
+        """
+        if not polygon or len(polygon) < 3:
+            return
+
+        pts = np.array(polygon, dtype=np.int32)
+
+        # Semi-transparent fill
+        overlay = frame.copy()
+        if is_goal_flash:
+            # Bright green flash when goal is scored
+            cv2.fillPoly(overlay, [pts], (0, 255, 0))
+            cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
+        else:
+            # Normal: subtle cyan tint
+            cv2.fillPoly(overlay, [pts], (200, 255, 200))
+            cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
+
+        # Draw polygon border
+        border_color = (0, 255, 0) if is_goal_flash else (0, 255, 255)
+        border_thick = 3 if is_goal_flash else 2
+        cv2.polylines(frame, [pts], isClosed=True, color=border_color, thickness=border_thick)
+
+        # Draw corner markers (P1-P4)
+        labels_p = ['P1', 'P2', 'P3', 'P4']
+        for i, (px, py) in enumerate(polygon[:4]):
+            px_i, py_i = int(px), int(py)
+            cv2.circle(frame, (px_i, py_i), 5, (0, 0, 255), -1)
+            cv2.circle(frame, (px_i, py_i), 5, (255, 255, 255), 1)
+            cv2.putText(frame, labels_p[i], (px_i + 8, py_i - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+
+        # Draw crossbar line (P3-P4) thicker
+        if len(polygon) >= 4:
+            p3 = (int(polygon[2][0]), int(polygon[2][1]))
+            p4 = (int(polygon[3][0]), int(polygon[3][1]))
+            cv2.line(frame, p3, p4, (255, 255, 255), 3)
+
+        # Label
+        centroid_x = int(np.mean([p[0] for p in polygon]))
+        centroid_y = int(np.mean([p[1] for p in polygon]))
+        cv2.putText(frame, label, (centroid_x - 40, centroid_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
+
+    def _draw_coordinate_debug_overlay(self, frame: np.ndarray):
+        """
+        Draws debug markers for all calibrated coordinates:
+        - Homography reference points (TL, TR, BR, BL)
+        - Goal polygon vertices (P1-P4 for left and right)
+        - Net ROI rectangles
+        """
+        h, w = frame.shape[:2]
+
+        # 1. Homography reference points
+        if self.reference_points_image:
+            ref_labels = ['TL', 'TR', 'BR', 'BL']
+            for i, pt in enumerate(self.reference_points_image[:4]):
+                px, py = int(pt[0]), int(pt[1])
+                cv2.drawMarker(frame, (px, py), (0, 200, 200), cv2.MARKER_CROSS, 15, 2)
+                cv2.putText(frame, f"REF-{ref_labels[i]}", (px + 10, py - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 200), 1)
+
+        # 2. Left goal polygon
+        if self.left_goal_polygon and len(self.left_goal_polygon) >= 4:
+            pts = np.array(self.left_goal_polygon, dtype=np.int32)
+            cv2.polylines(frame, [pts], True, (0, 165, 255), 1, cv2.LINE_AA)
+            for i, (px, py) in enumerate(self.left_goal_polygon[:4]):
+                cv2.circle(frame, (int(px), int(py)), 3, (0, 165, 255), -1)
+                cv2.putText(frame, f"LG-P{i+1}", (int(px) + 6, int(py) + 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 165, 255), 1)
+
+        # 3. Right goal polygon
+        if self.right_goal_polygon and len(self.right_goal_polygon) >= 4:
+            pts = np.array(self.right_goal_polygon, dtype=np.int32)
+            cv2.polylines(frame, [pts], True, (255, 165, 0), 1, cv2.LINE_AA)
+            for i, (px, py) in enumerate(self.right_goal_polygon[:4]):
+                cv2.circle(frame, (int(px), int(py)), 3, (255, 165, 0), -1)
+                cv2.putText(frame, f"RG-P{i+1}", (int(px) + 6, int(py) + 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 165, 0), 1)
+
+        # 4. Net ROI rectangles
+        if self.left_net_roi:
+            x1, y1, x2, y2 = self.left_net_roi
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 255, 128), 1)
+            cv2.putText(frame, "L-NET-ROI", (x1, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128, 255, 128), 1)
+        if self.right_net_roi:
+            x1, y1, x2, y2 = self.right_net_roi
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (128, 128, 255), 1)
+            cv2.putText(frame, "R-NET-ROI", (x1, y1 - 4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, (128, 128, 255), 1)
+
     def _render_mini_map(
         self,
         metric_positions: Dict[int, Tuple[float, float]],
@@ -494,41 +671,90 @@ class Visualizer:
     ) -> np.ndarray:
         """
         Renders 2D tactical mini-map diagram showing pitch coordinates.
-        Enhanced with ball position and possession indicator.
+        Enhanced with 3D goal nets, ball position and possession indicator.
         """
         mini_map = np.full((self.mini_map_h, self.mini_map_w, 3), (34, 139, 34), dtype=np.uint8)
+        map_w = self.mini_map_w
+        map_h = self.mini_map_h
 
+        # Helper: pitch meters -> mini-map pixels
+        def m2px(x_m, y_m):
+            px = int(5 + (x_m / self.pitch_length) * (map_w - 10))
+            py = int(5 + (y_m / self.pitch_width) * (map_h - 10))
+            return max(5, min(map_w - 5, px)), max(5, min(map_h - 5, py))
+
+        # ── Draw 3D Goal Nets (behind goal lines) ──────────────
+        goal_y_top_px = int(5 + (self.goal_y_min_m / self.pitch_width) * (map_h - 10))
+        goal_y_bot_px = int(5 + (self.goal_y_max_m / self.pitch_width) * (map_h - 10))
+        net_depth_px = max(4, int((self.goal_depth_m / self.pitch_length) * (map_w - 10)))
+
+        # Left goal net (extends left of goal line, x=0 -> x=-depth)
+        left_net_x1 = max(1, 5 - net_depth_px)
+        left_net_x2 = 5
+        # Net background fill
+        cv2.rectangle(mini_map, (left_net_x1, goal_y_top_px), (left_net_x2, goal_y_bot_px),
+                      (220, 220, 220), -1)
+        # Net mesh lines (horizontal)
+        for ny in range(goal_y_top_px, goal_y_bot_px, 4):
+            cv2.line(mini_map, (left_net_x1, ny), (left_net_x2, ny), (160, 160, 160), 1)
+        # Net mesh lines (vertical)
+        for nx in range(left_net_x1, left_net_x2, 3):
+            cv2.line(mini_map, (nx, goal_y_top_px), (nx, goal_y_bot_px), (160, 160, 160), 1)
+        # Net border
+        cv2.rectangle(mini_map, (left_net_x1, goal_y_top_px), (left_net_x2, goal_y_bot_px),
+                      (255, 255, 255), 1)
+        # Goal mouth opening (bright cyan bar on goal line)
+        cv2.line(mini_map, (5, goal_y_top_px), (5, goal_y_bot_px), (0, 255, 255), 2)
+
+        # Right goal net (extends right of goal line, x=105 -> x=105+depth)
+        right_net_x1 = map_w - 5
+        right_net_x2 = min(map_w - 1, map_w - 5 + net_depth_px)
+        cv2.rectangle(mini_map, (right_net_x1, goal_y_top_px), (right_net_x2, goal_y_bot_px),
+                      (220, 220, 220), -1)
+        for ny in range(goal_y_top_px, goal_y_bot_px, 4):
+            cv2.line(mini_map, (right_net_x1, ny), (right_net_x2, ny), (160, 160, 160), 1)
+        for nx in range(right_net_x1, right_net_x2, 3):
+            cv2.line(mini_map, (nx, goal_y_top_px), (nx, goal_y_bot_px), (160, 160, 160), 1)
+        cv2.rectangle(mini_map, (right_net_x1, goal_y_top_px), (right_net_x2, goal_y_bot_px),
+                      (255, 255, 255), 1)
+        cv2.line(mini_map, (map_w - 5, goal_y_top_px), (map_w - 5, goal_y_bot_px), (0, 255, 255), 2)
+
+        # ── Standard pitch markings ────────────────────────────
         # Pitch outline
-        cv2.rectangle(mini_map, (5, 5), (self.mini_map_w - 5, self.mini_map_h - 5), (255, 255, 255), 2)
+        cv2.rectangle(mini_map, (5, 5), (map_w - 5, map_h - 5), (255, 255, 255), 2)
         # Center line
-        cv2.line(mini_map, (self.mini_map_w // 2, 5), (self.mini_map_w // 2, self.mini_map_h - 5), (255, 255, 255), 1)
+        cv2.line(mini_map, (map_w // 2, 5), (map_w // 2, map_h - 5), (255, 255, 255), 1)
         # Center circle
-        cv2.circle(mini_map, (self.mini_map_w // 2, self.mini_map_h // 2), 20, (255, 255, 255), 1)
+        cv2.circle(mini_map, (map_w // 2, map_h // 2), 20, (255, 255, 255), 1)
 
         # Penalty areas (scaled proportions)
-        pa_w = int((16.5 / self.pitch_length) * (self.mini_map_w - 10))
-        pa_h = int((40.32 / self.pitch_width) * (self.mini_map_h - 10))
-        pa_y_offset = (self.mini_map_h - pa_h) // 2
-        # Left penalty area
+        pa_w = int((16.5 / self.pitch_length) * (map_w - 10))
+        pa_h = int((40.32 / self.pitch_width) * (map_h - 10))
+        pa_y_offset = (map_h - pa_h) // 2
         cv2.rectangle(mini_map, (5, pa_y_offset), (5 + pa_w, pa_y_offset + pa_h), (255, 255, 255), 1)
-        # Right penalty area
-        cv2.rectangle(mini_map, (self.mini_map_w - 5 - pa_w, pa_y_offset), (self.mini_map_w - 5, pa_y_offset + pa_h), (255, 255, 255), 1)
+        cv2.rectangle(mini_map, (map_w - 5 - pa_w, pa_y_offset), (map_w - 5, pa_y_offset + pa_h), (255, 255, 255), 1)
 
-        # Draw ball
+        # ── Draw ball (with goal-in-net indicator) ─────────────
+        ball_in_net = False
         if ball_pos_m is not None:
-            bpx = int(5 + (ball_pos_m[0] / self.pitch_length) * (self.mini_map_w - 10))
-            bpy = int(5 + (ball_pos_m[1] / self.pitch_width) * (self.mini_map_h - 10))
-            bpx = max(5, min(self.mini_map_w - 5, bpx))
-            bpy = max(5, min(self.mini_map_h - 5, bpy))
-            cv2.circle(mini_map, (bpx, bpy), 4, (0, 255, 255), -1)
-            cv2.circle(mini_map, (bpx, bpy), 4, (0, 0, 0), 1)
+            bpx, bpy = m2px(ball_pos_m[0], ball_pos_m[1])
+            # Check if ball is inside goal mouth (past goal line + within goal width)
+            in_goal_y = self.goal_y_min_m <= ball_pos_m[1] <= self.goal_y_max_m
+            in_left_net = ball_pos_m[0] <= 1.0 and in_goal_y
+            in_right_net = ball_pos_m[0] >= (self.pitch_length - 1.0) and in_goal_y
+            ball_in_net = in_left_net or in_right_net
 
-        # Draw players
+            if ball_in_net:
+                # Ball inside net: bright green pulsing dot
+                cv2.circle(mini_map, (bpx, bpy), 6, (0, 255, 0), -1)
+                cv2.circle(mini_map, (bpx, bpy), 8, (0, 255, 0), 2)
+            else:
+                cv2.circle(mini_map, (bpx, bpy), 4, (0, 255, 255), -1)
+                cv2.circle(mini_map, (bpx, bpy), 4, (0, 0, 0), 1)
+
+        # ── Draw players ──────────────────────────────────────
         for t_id, (x_m, y_m) in metric_positions.items():
-            px = int(5 + (x_m / self.pitch_length) * (self.mini_map_w - 10))
-            py = int(5 + (y_m / self.pitch_width) * (self.mini_map_h - 10))
-            px = max(5, min(self.mini_map_w - 5, px))
-            py = max(5, min(self.mini_map_h - 5, py))
+            px, py = m2px(x_m, y_m)
 
             team_id = team_assignments.get(t_id, 0)
             color = self.color_team_a if team_id == 0 else self.color_team_b
@@ -536,7 +762,7 @@ class Visualizer:
             radius = 5
             if t_id == possession_id:
                 radius = 7
-                cv2.circle(mini_map, (px, py), radius + 2, (0, 0, 255), 2)  # Red ring
+                cv2.circle(mini_map, (px, py), radius + 2, (0, 0, 255), 2)
 
             cv2.circle(mini_map, (px, py), radius, color, -1)
             cv2.circle(mini_map, (px, py), radius, (0, 0, 0), 1)

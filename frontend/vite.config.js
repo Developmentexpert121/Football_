@@ -7,14 +7,33 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000',
+        target: 'https://noted-mere-awesome-broker.trycloudflare.com',
         changeOrigin: true,
         secure: false,
+        timeout: 600000,
+        proxyTimeout: 600000,
+        headers: {
+          'ngrok-skip-browser-warning': 'true'
+        },
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, res) => {
+            console.log('[Vite Proxy Warning] Connection reset by backend tunnel. Please check your Colab server status.');
+            if (res && !res.headersSent) {
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Backend GPU tunnel disconnected or restarted.' }));
+            }
+          });
+        }
       },
       '/media': {
-        target: process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000',
+        target: 'https://noted-mere-awesome-broker.trycloudflare.com',
         changeOrigin: true,
         secure: false,
+        timeout: 600000,
+        proxyTimeout: 600000,
+        headers: {
+          'ngrok-skip-browser-warning': 'true'
+        }
       },
     }
   }
