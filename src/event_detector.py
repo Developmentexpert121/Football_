@@ -248,19 +248,19 @@ class EventDetector:
         self.pitch_length = pitch_length
         self.pitch_width = pitch_width
 
-        # Goal detection thresholds
-        self.goal_line_thresh = goal_line_thresh  # meters from goal line
-        self.goal_mouth_y_min = goal_mouth_y_min  # 7.32m goal width centered on 68m pitch
-        self.goal_mouth_y_max = goal_mouth_y_max
+        # Goal detection thresholds — dynamic camera adaptive
+        self.goal_line_thresh = max(3.5, goal_line_thresh)  # meters expansion for camera perspective
+        self.goal_mouth_y_min = goal_mouth_y_min - 3.0       # expanded Y margin (25.0m to 43.0m)
+        self.goal_mouth_y_max = goal_mouth_y_max + 3.0
 
         # 2.5D Hybrid Goalmouth Polygons (Image Space P1, P2, P3, P4)
         self.left_goal_polygon = left_goal_polygon or [
-            [180, 580], [480, 420], [480, 260], [180, 250]
+            [80, 720], [520, 520], [520, 180], [80, 180]
         ]
         self.right_goal_polygon = right_goal_polygon or [
-            [700, 440], [1020, 600], [1020, 260], [700, 270]
+            [680, 520], [1180, 720], [1180, 180], [680, 180]
         ]
-        self.consecutive_goal_frames = consecutive_goal_frames
+        self.consecutive_goal_frames = 1  # Instant 1-frame trigger on high confidence
         self._goal_streak = 0
 
         # Goal Detection Upgrade: new components
