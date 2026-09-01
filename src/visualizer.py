@@ -74,7 +74,8 @@ class Visualizer:
         right_goal_polygon: Optional[List[List[float]]] = None,
         left_net_roi: Optional[List[int]] = None,
         right_net_roi: Optional[List[int]] = None,
-        reference_points_image: Optional[List[List[float]]] = None
+        reference_points_image: Optional[List[List[float]]] = None,
+        reference_points_pitch: Optional[List[List[float]]] = None
     ):
         self.pitch_length = pitch_length
         self.pitch_width = pitch_width
@@ -86,13 +87,6 @@ class Visualizer:
         self.draw_goal_overlay = draw_goal_overlay
         self.draw_debug_coordinates = draw_debug_coordinates
 
-        # Goal polygon pixel coordinates (image space)
-        self.left_goal_polygon = left_goal_polygon or [
-            [97, 392], [150, 392], [150, 230], [97, 230]
-        ]
-        self.right_goal_polygon = right_goal_polygon or [
-            [1129, 392], [1182, 392], [1182, 230], [1129, 230]
-        ]
         # Net ROI pixel coordinates [x1, y1, x2, y2]
         self.left_net_roi = left_net_roi or [50, 210, 160, 420]
         self.right_net_roi = right_net_roi or [1120, 210, 1230, 420]
@@ -114,6 +108,31 @@ class Visualizer:
         self.color_team_b = (255, 100, 50)  # Blue (BGR)
         self.color_referee = (0, 255, 255)  # Yellow (BGR)
         self.color_ball = (0, 255, 0)       # Cyan/Green (BGR)
+
+        # ── Compute inverse homography for 3D goal projection ──
+        self.H_inv = None
+        self.left_goal_3d = None   # dict of 3D goal pixel coords
+        self.right_goal_3d = None
+        ref_img = reference_points_image
+        ref_pitch = reference_points_pitch
+        if ref_img and ref_pitch and len(ref_img) >= 4 and len(ref_pitch) >= 4:
+            try:
+                H, _ = cv2.findHomography(
+                    np.float32(ref_img), np.float32(ref_pitch)
+                )
+                self.H_inv = np.linalg.inv(H)
+                self.left_goal_3d = self._compute_3d_goal_pixels('left')
+                self.right_goal_3d = self._compute_3d_goal_pixels('right')
+            except Exception as e:
+                print(f"[Visualizer] Could not compute 3D goal projection: {e}")
+
+        # Fallback to config polygons if 3D projection failed
+        self.left_goal_polygon = left_goal_polygon or [
+            [97, 392], [150, 392], [150, 230], [97, 230]
+        ]
+        self.right_goal_polygon = right_goal_polygon or [
+            [1129, 392], [1182, 392], [1182, 230], [1129, 230]
+        ]
 
     def annotate_frame(
         self,
@@ -226,59 +245,69 @@ class Visualizer:
                     
                     speed_km_h = 0.0
                     dist_m = 0.0
-                    sprint_count = 0
                     if t_id in player_stats:
                         speed_km_h = player_stats[t_id].get('avg_speed_km_h', 0.0)
                         dist_m = player_stats[t_id].get('total_distance_m', 0.0)
-                        sprint_count = player_stats[t_id].get('sprint_count', 0)
                     
-                    label_id = f"{t_id}"
-                    label_speed = f"{speed_km_h} km/h"
-                    label_dist = f"{dist_m} m"
+                    # Primary label uses OCR Jersey Number if available, fallback to Track ID
+                    if self.draw_jersey and jersey_map and t_id in jersey_map:
+                        label_id = f"#{jersey_map[t_id]}"
+                    else:
+                        label_id = f"#{t_id}"
+
+                    label_speed = f"{speed_km_h} km/h" if speed_km_h > 0 else ""
+                    label_dist = f"{dist_m} m" if dist_m > 0 else ""
 
                 # Draw ellipse indicator under feet
                 foot_x = int((x1 + x2) / 2)
                 foot_y = y2
-                ring_thickness = 3 if cls_id == 1 else 2
+                ring_thickness = 3 if cls_id in (1, 2) else 2
                 cv2.ellipse(annotated, (foot_x, foot_y), (max(12, int((x2 - x1)/2)), 7), 0, 0, 360, color, ring_thickness)
 
-                # ----- Goalkeeper / Jersey Badge -----
+                # ----- Primary Player / GK / Ref Head Badge -----
+                badge_y_top = max(5, y1 - 28)
                 if cls_id == 1:
-                    # Prominent GK badge above goalkeeper's head
-                    gk_badge_text = f"GK #{t_id}"
-                    badge_y_top = max(0, y1 - 32)
-                    text_sz, _ = cv2.getTextSize(gk_badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-                    badge_w = text_sz[0] + 16
+                    # Prominent GK badge
+                    gk_j = jersey_map.get(t_id, t_id) if (jersey_map and t_id in jersey_map) else t_id
+                    gk_badge_text = f"GK #{gk_j}"
+                    text_sz, _ = cv2.getTextSize(gk_badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                    badge_w = text_sz[0] + 14
                     badge_x = int((x1 + x2) / 2) - badge_w // 2
                     
-                    # Gold background with dark text
-                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 24), (0, 215, 255), -1)
-                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 24), (0, 0, 0), 2)
-                    cv2.putText(annotated, gk_badge_text, (badge_x + 8, badge_y_top + 18),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-                elif self.draw_jersey and jersey_map and t_id in jersey_map:
-                    jersey_num = str(jersey_map[t_id])
-                    badge_y_top = max(0, y1 - 30)
-                    badge_w = len(jersey_num) * 14 + 10
+                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), (0, 215, 255), -1)
+                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), (0, 0, 0), 2)
+                    cv2.putText(annotated, gk_badge_text, (badge_x + 7, badge_y_top + 16),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
+                elif cls_id == 2:
+                    # Prominent Referee badge
+                    ref_badge_text = f"REF #{t_id}"
+                    text_sz, _ = cv2.getTextSize(ref_badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                    badge_w = text_sz[0] + 14
                     badge_x = int((x1 + x2) / 2) - badge_w // 2
-                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), color, -1)
-                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), (0, 0, 0), 1)
-                    cv2.putText(annotated, f"#{jersey_num}", (badge_x + 3, badge_y_top + 17),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+                    
+                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), (0, 255, 255), -1)
+                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), (0, 0, 0), 2)
+                    cv2.putText(annotated, ref_badge_text, (badge_x + 7, badge_y_top + 16),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
+                else:
+                    # Player Jersey Number Badge (White box with bold team-colored text)
+                    badge_text = label_id
+                    text_sz, _ = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+                    badge_w = max(28, text_sz[0] + 12)
+                    badge_x = int((x1 + x2) / 2) - badge_w // 2
 
-                # ----- Track ID Badge below feet -----
-                badge_w = len(label_id) * 12 + 10
-                cv2.rectangle(annotated, (foot_x - badge_w//2, foot_y + 5), (foot_x + badge_w//2, foot_y + 25), (255, 255, 255), -1)
-                cv2.rectangle(annotated, (foot_x - badge_w//2, foot_y + 5), (foot_x + badge_w//2, foot_y + 25), color, 1)
-                cv2.putText(annotated, label_id, (foot_x - badge_w//2 + 5, foot_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                
-                # Draw speed and distance under the badge
+                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), (255, 255, 255), -1)
+                    cv2.rectangle(annotated, (badge_x, badge_y_top), (badge_x + badge_w, badge_y_top + 22), color, 2)
+                    cv2.putText(annotated, badge_text, (badge_x + 6, badge_y_top + 16),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
+
+                # ----- Speed and Distance Metrics below feet -----
                 if label_speed:
-                    text_size, _ = cv2.getTextSize(label_speed, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 2)
-                    cv2.putText(annotated, label_speed, (foot_x - text_size[0]//2, foot_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,0), 2)
+                    text_size, _ = cv2.getTextSize(label_speed, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 2)
+                    cv2.putText(annotated, label_speed, (foot_x - text_size[0]//2, foot_y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 2)
                 if label_dist:
-                    text_size, _ = cv2.getTextSize(label_dist, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 2)
-                    cv2.putText(annotated, label_dist, (foot_x - text_size[0]//2, foot_y + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,0,0), 2)
+                    text_size, _ = cv2.getTextSize(label_dist, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 2)
+                    cv2.putText(annotated, label_dist, (foot_x - text_size[0]//2, foot_y + 32), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 220, 220), 2)
 
                 # ----- Action Label above player -----
                 if self.draw_actions and action_labels and t_id in action_labels:
@@ -354,15 +383,21 @@ class Visualizer:
                 ball_near_right = bx > (self.pitch_length - 25.0)
 
             if ball_near_left or self._goal_flash_counter > 0:
-                self._draw_goal_polygon_on_frame(annotated, self.left_goal_polygon, 'LEFT GOAL',
-                                                  is_goal_flash=(self._goal_flash_counter > 0 and self._goal_flash_side == 'left'))
+                self._draw_goal_polygon_on_frame(
+                    annotated, self.left_goal_polygon, 'LEFT GOAL',
+                    is_goal_flash=(self._goal_flash_counter > 0 and self._goal_flash_side == 'left'),
+                    goal_3d=self.left_goal_3d
+                )
             if ball_near_right or self._goal_flash_counter > 0:
-                self._draw_goal_polygon_on_frame(annotated, self.right_goal_polygon, 'RIGHT GOAL',
-                                                  is_goal_flash=(self._goal_flash_counter > 0 and self._goal_flash_side == 'right'))
+                self._draw_goal_polygon_on_frame(
+                    annotated, self.right_goal_polygon, 'RIGHT GOAL',
+                    is_goal_flash=(self._goal_flash_counter > 0 and self._goal_flash_side == 'right'),
+                    goal_3d=self.right_goal_3d
+                )
 
             if self._goal_flash_counter > 0:
                 self._goal_flash_counter -= 1
-                # Draw big "GOAL!" flash banner
+                # Draw big "GOAL!" flash banner (center screen)
                 if self._goal_flash_counter > 15:
                     overlay_flash = annotated.copy()
                     cv2.rectangle(overlay_flash, (w // 2 - 160, h // 2 - 40), (w // 2 + 160, h // 2 + 40), (0, 255, 0), -1)
@@ -560,59 +595,223 @@ class Visualizer:
             cv2.putText(frame, desc, (17, y_offset + 34),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
 
+    def _pitch_to_pixel(self, x_m: float, y_m: float) -> Tuple[int, int]:
+        """Project pitch meters (ground plane) to image pixels via H_inv."""
+        pt = np.float32([[[x_m, y_m]]])
+        px = cv2.perspectiveTransform(pt, self.H_inv)
+        return int(px[0][0][0]), int(px[0][0][1])
+
+    def _compute_3d_goal_pixels(self, side: str) -> dict:
+        """
+        Compute pixel coordinates for a full 3D goal wireframe.
+        Uses inverse homography for ground plane + estimated vertical scale for crossbar.
+
+        Returns dict with keys:
+          post_left_base, post_right_base (ground level post feet)
+          post_left_top, post_right_top (crossbar corners)
+          net_back_left, net_back_right (back of net, ground level)
+          net_back_left_top, net_back_right_top (back of net, crossbar height)
+          crossbar_height_px (estimated crossbar pixel offset)
+        """
+        if self.H_inv is None:
+            return None
+
+        y_min = self.goal_y_min_m  # 30.34
+        y_max = self.goal_y_max_m  # 37.66
+        y_mid = (y_min + y_max) / 2.0
+
+        if side == 'left':
+            goal_x = 0.0
+            net_x = -self.goal_depth_m  # behind the goal line
+        else:
+            goal_x = self.pitch_length   # 105.0
+            net_x = self.pitch_length + self.goal_depth_m
+
+        # Ground-level points
+        post_left_base = self._pitch_to_pixel(goal_x, y_min)
+        post_right_base = self._pitch_to_pixel(goal_x, y_max)
+        net_back_left = self._pitch_to_pixel(net_x, y_min)
+        net_back_right = self._pitch_to_pixel(net_x, y_max)
+
+        # Estimate crossbar height in pixels using local vertical scale
+        # Take two points 1m apart on the y-axis at goal line position
+        p_a = self._pitch_to_pixel(goal_x, y_mid)
+        p_b = self._pitch_to_pixel(goal_x, y_mid + 1.0)
+        pixels_per_meter = np.sqrt((p_b[0] - p_a[0])**2 + (p_b[1] - p_a[1])**2)
+        # Use 1.2x multiplier and minimum 45px so goal is clearly visible
+        crossbar_px = max(45, int(self.goal_height_m * pixels_per_meter * 1.2))
+
+        # Crossbar pixel positions (shift upward from base)
+        post_left_top = (post_left_base[0], post_left_base[1] - crossbar_px)
+        post_right_top = (post_right_base[0], post_right_base[1] - crossbar_px)
+
+        # Back of net top (70% height for perspective diminishing effect)
+        back_crossbar_px = int(crossbar_px * 0.75)
+        net_back_left_top = (net_back_left[0], net_back_left[1] - back_crossbar_px)
+        net_back_right_top = (net_back_right[0], net_back_right[1] - back_crossbar_px)
+
+        return {
+            'post_left_base': post_left_base,
+            'post_right_base': post_right_base,
+            'post_left_top': post_left_top,
+            'post_right_top': post_right_top,
+            'net_back_left': net_back_left,
+            'net_back_right': net_back_right,
+            'net_back_left_top': net_back_left_top,
+            'net_back_right_top': net_back_right_top,
+            'crossbar_height_px': crossbar_px,
+        }
+
     def _draw_goal_polygon_on_frame(
         self,
         frame: np.ndarray,
         polygon: List[List[float]],
         label: str,
-        is_goal_flash: bool = False
+        is_goal_flash: bool = False,
+        goal_3d: dict = None
     ):
         """
-        Draws a semi-transparent goal polygon overlay on the video frame.
-        Shows the goal mouth zone so viewers can see where the ball enters.
-        P1=base-left, P2=base-right, P3=top-right(crossbar), P4=top-left(crossbar)
+        Draws a 3D goal wireframe on the video frame if 3D data is available,
+        otherwise falls back to the flat polygon overlay.
+        Shows: posts, crossbar, net depth, side netting, with goal-scored flash.
         """
+        if goal_3d is not None:
+            self._draw_3d_goal_wireframe(frame, goal_3d, label, is_goal_flash)
+            return
+
+        # ── Fallback: flat polygon ──────────────────────────
         if not polygon or len(polygon) < 3:
             return
 
         pts = np.array(polygon, dtype=np.int32)
-
-        # Semi-transparent fill
         overlay = frame.copy()
         if is_goal_flash:
-            # Bright green flash when goal is scored
             cv2.fillPoly(overlay, [pts], (0, 255, 0))
             cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
         else:
-            # Normal: subtle cyan tint
             cv2.fillPoly(overlay, [pts], (200, 255, 200))
             cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
-
-        # Draw polygon border
         border_color = (0, 255, 0) if is_goal_flash else (0, 255, 255)
-        border_thick = 3 if is_goal_flash else 2
-        cv2.polylines(frame, [pts], isClosed=True, color=border_color, thickness=border_thick)
+        cv2.polylines(frame, [pts], True, border_color, 2)
 
-        # Draw corner markers (P1-P4)
-        labels_p = ['P1', 'P2', 'P3', 'P4']
-        for i, (px, py) in enumerate(polygon[:4]):
-            px_i, py_i = int(px), int(py)
-            cv2.circle(frame, (px_i, py_i), 5, (0, 0, 255), -1)
-            cv2.circle(frame, (px_i, py_i), 5, (255, 255, 255), 1)
-            cv2.putText(frame, labels_p[i], (px_i + 8, py_i - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+    def _draw_3d_goal_wireframe(
+        self,
+        frame: np.ndarray,
+        g: dict,
+        label: str,
+        is_goal_flash: bool = False
+    ):
+        """
+        Draws a full 3D perspective goal wireframe:
+        - Two vertical posts (white thick lines)
+        - Horizontal crossbar (white thick line)
+        - Net depth: side netting (4 lines connecting front to back)
+        - Back of net rectangle
+        - Semi-transparent goal mouth fill
+        - NET mesh inside the back plane
+        - GOAL! flash effect when goal is scored
+        """
+        # Unpack coordinates
+        plb = g['post_left_base']
+        prb = g['post_right_base']
+        plt_ = g['post_left_top']
+        prt = g['post_right_top']
+        nbl = g['net_back_left']
+        nbr = g['net_back_right']
+        nblt = g['net_back_left_top']
+        nbrt = g['net_back_right_top']
 
-        # Draw crossbar line (P3-P4) thicker
-        if len(polygon) >= 4:
-            p3 = (int(polygon[2][0]), int(polygon[2][1]))
-            p4 = (int(polygon[3][0]), int(polygon[3][1]))
-            cv2.line(frame, p3, p4, (255, 255, 255), 3)
+        # ── Colors ──
+        if is_goal_flash:
+            post_color = (0, 255, 0)
+            net_color = (0, 200, 0)
+            fill_color = (0, 255, 0)
+            fill_alpha = 0.40
+            label_color = (0, 255, 0)
+        else:
+            post_color = (255, 255, 255)
+            net_color = (180, 180, 180)
+            fill_color = (200, 255, 200)
+            fill_alpha = 0.12
+            label_color = (0, 255, 255)
 
-        # Label
-        centroid_x = int(np.mean([p[0] for p in polygon]))
-        centroid_y = int(np.mean([p[1] for p in polygon]))
-        cv2.putText(frame, label, (centroid_x - 40, centroid_y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, border_color, 1, cv2.LINE_AA)
+        # ── 1. Semi-transparent goal mouth fill (front face) ──
+        front_face = np.array([plb, prb, prt, plt_], dtype=np.int32)
+        overlay = frame.copy()
+        cv2.fillPoly(overlay, [front_face], fill_color)
+        cv2.addWeighted(overlay, fill_alpha, frame, 1.0 - fill_alpha, 0, frame)
+
+        # ── 2. Back of net fill (darker, semi-transparent) ──
+        back_face = np.array([nbl, nbr, nbrt, nblt], dtype=np.int32)
+        overlay2 = frame.copy()
+        cv2.fillPoly(overlay2, [back_face], (40, 40, 40))
+        cv2.addWeighted(overlay2, 0.3, frame, 0.7, 0, frame)
+
+        # ── 3. Side netting lines (connect front to back) ──
+        side_lines = [
+            (plb, nbl), (prb, nbr),       # bottom edges
+            (plt_, nblt), (prt, nbrt),     # top edges
+        ]
+        for p1, p2 in side_lines:
+            cv2.line(frame, p1, p2, net_color, 1, cv2.LINE_AA)
+
+        # ── 4. Net mesh on back plane ──
+        n_mesh = 5
+        for i in range(1, n_mesh):
+            frac = i / n_mesh
+            # Horizontal mesh line
+            lx = int(nbl[0] + (nbr[0] - nbl[0]) * frac)
+            ly = int(nbl[1] + (nbr[1] - nbl[1]) * frac)
+            ltx = int(nblt[0] + (nbrt[0] - nblt[0]) * frac)
+            lty = int(nblt[1] + (nbrt[1] - nblt[1]) * frac)
+            cv2.line(frame, (lx, ly), (ltx, lty), (100, 100, 100), 1)
+        for i in range(1, n_mesh):
+            frac = i / n_mesh
+            # Vertical mesh line
+            bx = int(nbl[0] + (nblt[0] - nbl[0]) * frac)
+            by = int(nbl[1] + (nblt[1] - nbl[1]) * frac)
+            brx = int(nbr[0] + (nbrt[0] - nbr[0]) * frac)
+            bry = int(nbr[1] + (nbrt[1] - nbr[1]) * frac)
+            cv2.line(frame, (bx, by), (brx, bry), (100, 100, 100), 1)
+
+        # ── 5. Net mesh on top plane (roof netting) ──
+        top_face = [plt_, prt, nbrt, nblt]
+        for i in range(1, 4):
+            frac = i / 4
+            fx = int(plt_[0] + (nblt[0] - plt_[0]) * frac)
+            fy = int(plt_[1] + (nblt[1] - plt_[1]) * frac)
+            gx = int(prt[0] + (nbrt[0] - prt[0]) * frac)
+            gy = int(prt[1] + (nbrt[1] - prt[1]) * frac)
+            cv2.line(frame, (fx, fy), (gx, gy), (100, 100, 100), 1)
+
+        # ── 6. Back of net border ──
+        cv2.polylines(frame, [back_face], True, net_color, 1, cv2.LINE_AA)
+
+        # ── 7. POSTS (thick white lines) ──
+        cv2.line(frame, plb, plt_, post_color, 3, cv2.LINE_AA)
+        cv2.line(frame, prb, prt, post_color, 3, cv2.LINE_AA)
+
+        # ── 8. CROSSBAR (thick white line) ──
+        cv2.line(frame, plt_, prt, post_color, 4, cv2.LINE_AA)
+
+        # ── 9. Post base circles (ground contact) ──
+        cv2.circle(frame, plb, 4, post_color, -1)
+        cv2.circle(frame, prb, 4, post_color, -1)
+
+        # ── 10. Goal label ──
+        cx = (plb[0] + prb[0]) // 2
+        cy = (plt_[1] + prt[1]) // 2 - 12
+        cv2.putText(frame, label, (cx - 35, cy),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2, cv2.LINE_AA)
+
+        # ── 11. GOAL! flash big text on screen ──
+        if is_goal_flash:
+            h, w = frame.shape[:2]
+            # Draw "GOAL!" on crossbar area
+            bar_cx = (plt_[0] + prt[0]) // 2
+            bar_cy = (plt_[1] + prt[1]) // 2
+            cv2.putText(frame, "GOAL!", (bar_cx - 50, bar_cy - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
 
     def _draw_coordinate_debug_overlay(self, frame: np.ndarray):
         """
@@ -671,83 +870,132 @@ class Visualizer:
     ) -> np.ndarray:
         """
         Renders 2D tactical mini-map diagram showing pitch coordinates.
-        Enhanced with 3D goal nets, ball position and possession indicator.
+        Enhanced with prominent 3D goal nets, ball position and possession indicator.
         """
-        mini_map = np.full((self.mini_map_h, self.mini_map_w, 3), (34, 139, 34), dtype=np.uint8)
         map_w = self.mini_map_w
         map_h = self.mini_map_h
+        # Use extra padding so goal nets have room to draw OUTSIDE the pitch
+        pad = 12  # padding from edge of image to pitch outline
+        pitch_w_px = map_w - 2 * pad   # usable pitch pixel width
+        pitch_h_px = map_h - 2 * pad   # usable pitch pixel height
 
-        # Helper: pitch meters -> mini-map pixels
+        mini_map = np.full((map_h, map_w, 3), (20, 100, 20), dtype=np.uint8)
+
+        # Helper: pitch meters -> mini-map pixels (within pitch area)
         def m2px(x_m, y_m):
-            px = int(5 + (x_m / self.pitch_length) * (map_w - 10))
-            py = int(5 + (y_m / self.pitch_width) * (map_h - 10))
-            return max(5, min(map_w - 5, px)), max(5, min(map_h - 5, py))
+            px = int(pad + (x_m / self.pitch_length) * pitch_w_px)
+            py = int(pad + (y_m / self.pitch_width) * pitch_h_px)
+            return max(0, min(map_w - 1, px)), max(0, min(map_h - 1, py))
 
-        # ── Draw 3D Goal Nets (behind goal lines) ──────────────
-        goal_y_top_px = int(5 + (self.goal_y_min_m / self.pitch_width) * (map_h - 10))
-        goal_y_bot_px = int(5 + (self.goal_y_max_m / self.pitch_width) * (map_h - 10))
-        net_depth_px = max(4, int((self.goal_depth_m / self.pitch_length) * (map_w - 10)))
+        # ── GOAL DIMENSIONS in pixels ──────────────────────────
+        # Goal mouth: 7.32m wide, centered at y = pitch_width/2
+        gy_top = int(pad + (self.goal_y_min_m / self.pitch_width) * pitch_h_px)
+        gy_bot = int(pad + (self.goal_y_max_m / self.pitch_width) * pitch_h_px)
+        goal_h_px = gy_bot - gy_top  # ~17-20px depending on map size
 
-        # Left goal net (extends left of goal line, x=0 -> x=-depth)
-        left_net_x1 = max(1, 5 - net_depth_px)
-        left_net_x2 = 5
-        # Net background fill
-        cv2.rectangle(mini_map, (left_net_x1, goal_y_top_px), (left_net_x2, goal_y_bot_px),
-                      (220, 220, 220), -1)
-        # Net mesh lines (horizontal)
-        for ny in range(goal_y_top_px, goal_y_bot_px, 4):
-            cv2.line(mini_map, (left_net_x1, ny), (left_net_x2, ny), (160, 160, 160), 1)
-        # Net mesh lines (vertical)
-        for nx in range(left_net_x1, left_net_x2, 3):
-            cv2.line(mini_map, (nx, goal_y_top_px), (nx, goal_y_bot_px), (160, 160, 160), 1)
-        # Net border
-        cv2.rectangle(mini_map, (left_net_x1, goal_y_top_px), (left_net_x2, goal_y_bot_px),
-                      (255, 255, 255), 1)
-        # Goal mouth opening (bright cyan bar on goal line)
-        cv2.line(mini_map, (5, goal_y_top_px), (5, goal_y_bot_px), (0, 255, 255), 2)
+        # Net depth: exaggerate for visibility (min 10px)
+        net_depth = max(10, int(pad * 0.9))
 
-        # Right goal net (extends right of goal line, x=105 -> x=105+depth)
-        right_net_x1 = map_w - 5
-        right_net_x2 = min(map_w - 1, map_w - 5 + net_depth_px)
-        cv2.rectangle(mini_map, (right_net_x1, goal_y_top_px), (right_net_x2, goal_y_bot_px),
-                      (220, 220, 220), -1)
-        for ny in range(goal_y_top_px, goal_y_bot_px, 4):
-            cv2.line(mini_map, (right_net_x1, ny), (right_net_x2, ny), (160, 160, 160), 1)
-        for nx in range(right_net_x1, right_net_x2, 3):
-            cv2.line(mini_map, (nx, goal_y_top_px), (nx, goal_y_bot_px), (160, 160, 160), 1)
-        cv2.rectangle(mini_map, (right_net_x1, goal_y_top_px), (right_net_x2, goal_y_bot_px),
-                      (255, 255, 255), 1)
-        cv2.line(mini_map, (map_w - 5, goal_y_top_px), (map_w - 5, goal_y_bot_px), (0, 255, 255), 2)
+        # ═══════════════════════════════════════════════════════
+        # LEFT GOAL (x=0 side)
+        # ═══════════════════════════════════════════════════════
+        lg_line_x = pad  # goal line x position
+        lg_net_x = lg_line_x - net_depth  # back of net
+
+        # 3D trapezoid net (slightly narrower at back for depth effect)
+        shrink = 3  # pixels narrower at the back
+        trap_pts_l = np.array([
+            [lg_line_x, gy_top],      # front-top (goal post)
+            [lg_line_x, gy_bot],      # front-bottom (goal post)
+            [lg_net_x, gy_bot - shrink],   # back-bottom
+            [lg_net_x, gy_top + shrink],   # back-top
+        ], dtype=np.int32)
+
+        # Dark net background fill
+        cv2.fillPoly(mini_map, [trap_pts_l], (50, 50, 50))
+        # Net mesh: horizontal
+        for ny in range(gy_top + shrink, gy_bot - shrink, 3):
+            cv2.line(mini_map, (lg_net_x, ny), (lg_line_x, ny), (120, 120, 120), 1)
+        # Net mesh: vertical
+        for nx in range(lg_net_x, lg_line_x, 3):
+            frac_x = (nx - lg_net_x) / max(1, (lg_line_x - lg_net_x))
+            top_y = int(gy_top + shrink * (1 - frac_x))
+            bot_y = int(gy_bot - shrink * (1 - frac_x))
+            cv2.line(mini_map, (nx, top_y), (nx, bot_y), (120, 120, 120), 1)
+        # Net border (trapezoid outline)
+        cv2.polylines(mini_map, [trap_pts_l], True, (200, 200, 200), 1)
+        # Goal posts (thick bright dots)
+        cv2.circle(mini_map, (lg_line_x, gy_top), 3, (255, 255, 255), -1)
+        cv2.circle(mini_map, (lg_line_x, gy_bot), 3, (255, 255, 255), -1)
+        # Goal mouth opening bar (BRIGHT CYAN, thick)
+        cv2.line(mini_map, (lg_line_x, gy_top), (lg_line_x, gy_bot), (0, 255, 255), 3)
+
+        # ═══════════════════════════════════════════════════════
+        # RIGHT GOAL (x=pitch_length side)
+        # ═══════════════════════════════════════════════════════
+        rg_line_x = pad + pitch_w_px  # goal line x position
+        rg_net_x = rg_line_x + net_depth  # back of net
+
+        trap_pts_r = np.array([
+            [rg_line_x, gy_top],
+            [rg_line_x, gy_bot],
+            [rg_net_x, gy_bot - shrink],
+            [rg_net_x, gy_top + shrink],
+        ], dtype=np.int32)
+
+        cv2.fillPoly(mini_map, [trap_pts_r], (50, 50, 50))
+        for ny in range(gy_top + shrink, gy_bot - shrink, 3):
+            cv2.line(mini_map, (rg_line_x, ny), (rg_net_x, ny), (120, 120, 120), 1)
+        for nx in range(rg_line_x, rg_net_x, 3):
+            frac_x = (nx - rg_line_x) / max(1, (rg_net_x - rg_line_x))
+            top_y = int(gy_top + shrink * (1 - frac_x))
+            bot_y = int(gy_bot - shrink * (1 - frac_x))
+            cv2.line(mini_map, (nx, top_y), (nx, bot_y), (120, 120, 120), 1)
+        cv2.polylines(mini_map, [trap_pts_r], True, (200, 200, 200), 1)
+        cv2.circle(mini_map, (rg_line_x, gy_top), 3, (255, 255, 255), -1)
+        cv2.circle(mini_map, (rg_line_x, gy_bot), 3, (255, 255, 255), -1)
+        cv2.line(mini_map, (rg_line_x, gy_top), (rg_line_x, gy_bot), (0, 255, 255), 3)
 
         # ── Standard pitch markings ────────────────────────────
         # Pitch outline
-        cv2.rectangle(mini_map, (5, 5), (map_w - 5, map_h - 5), (255, 255, 255), 2)
+        cv2.rectangle(mini_map, (pad, pad), (pad + pitch_w_px, pad + pitch_h_px), (255, 255, 255), 2)
         # Center line
-        cv2.line(mini_map, (map_w // 2, 5), (map_w // 2, map_h - 5), (255, 255, 255), 1)
+        cx = pad + pitch_w_px // 2
+        cv2.line(mini_map, (cx, pad), (cx, pad + pitch_h_px), (255, 255, 255), 1)
         # Center circle
-        cv2.circle(mini_map, (map_w // 2, map_h // 2), 20, (255, 255, 255), 1)
+        cv2.circle(mini_map, (cx, pad + pitch_h_px // 2), 20, (255, 255, 255), 1)
+        # Center spot
+        cv2.circle(mini_map, (cx, pad + pitch_h_px // 2), 2, (255, 255, 255), -1)
 
         # Penalty areas (scaled proportions)
-        pa_w = int((16.5 / self.pitch_length) * (map_w - 10))
-        pa_h = int((40.32 / self.pitch_width) * (map_h - 10))
-        pa_y_offset = (map_h - pa_h) // 2
-        cv2.rectangle(mini_map, (5, pa_y_offset), (5 + pa_w, pa_y_offset + pa_h), (255, 255, 255), 1)
-        cv2.rectangle(mini_map, (map_w - 5 - pa_w, pa_y_offset), (map_w - 5, pa_y_offset + pa_h), (255, 255, 255), 1)
+        pa_w = int((16.5 / self.pitch_length) * pitch_w_px)
+        pa_h = int((40.32 / self.pitch_width) * pitch_h_px)
+        pa_y_offset = pad + (pitch_h_px - pa_h) // 2
+        cv2.rectangle(mini_map, (pad, pa_y_offset), (pad + pa_w, pa_y_offset + pa_h), (255, 255, 255), 1)
+        cv2.rectangle(mini_map, (pad + pitch_w_px - pa_w, pa_y_offset), (pad + pitch_w_px, pa_y_offset + pa_h), (255, 255, 255), 1)
+
+        # 6-yard boxes
+        sy_w = int((5.5 / self.pitch_length) * pitch_w_px)
+        sy_h = int((18.32 / self.pitch_width) * pitch_h_px)
+        sy_y = pad + (pitch_h_px - sy_h) // 2
+        cv2.rectangle(mini_map, (pad, sy_y), (pad + sy_w, sy_y + sy_h), (255, 255, 255), 1)
+        cv2.rectangle(mini_map, (pad + pitch_w_px - sy_w, sy_y), (pad + pitch_w_px, sy_y + sy_h), (255, 255, 255), 1)
 
         # ── Draw ball (with goal-in-net indicator) ─────────────
         ball_in_net = False
         if ball_pos_m is not None:
             bpx, bpy = m2px(ball_pos_m[0], ball_pos_m[1])
-            # Check if ball is inside goal mouth (past goal line + within goal width)
-            in_goal_y = self.goal_y_min_m <= ball_pos_m[1] <= self.goal_y_max_m
-            in_left_net = ball_pos_m[0] <= 1.0 and in_goal_y
-            in_right_net = ball_pos_m[0] >= (self.pitch_length - 1.0) and in_goal_y
+            # Check if ball is inside goal mouth
+            in_goal_y = self.goal_y_min_m - 1.0 <= ball_pos_m[1] <= self.goal_y_max_m + 1.0
+            in_left_net = ball_pos_m[0] <= 2.0 and in_goal_y
+            in_right_net = ball_pos_m[0] >= (self.pitch_length - 2.0) and in_goal_y
             ball_in_net = in_left_net or in_right_net
 
             if ball_in_net:
-                # Ball inside net: bright green pulsing dot
-                cv2.circle(mini_map, (bpx, bpy), 6, (0, 255, 0), -1)
-                cv2.circle(mini_map, (bpx, bpy), 8, (0, 255, 0), 2)
+                # Ball inside net: bright green pulsing dot with glow
+                cv2.circle(mini_map, (bpx, bpy), 8, (0, 200, 0), 2)
+                cv2.circle(mini_map, (bpx, bpy), 5, (0, 255, 0), -1)
+                cv2.circle(mini_map, (bpx, bpy), 5, (255, 255, 255), 1)
             else:
                 cv2.circle(mini_map, (bpx, bpy), 4, (0, 255, 255), -1)
                 cv2.circle(mini_map, (bpx, bpy), 4, (0, 0, 0), 1)
