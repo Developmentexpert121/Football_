@@ -906,6 +906,34 @@ class EventDetector:
 
         return inside
 
+    def _check_goalkeeper_save_biomechanics(
+        self,
+        ball_pixel: Optional[Tuple[float, float]],
+        gk_pose_data: Dict[int, Dict[str, Any]]
+    ) -> bool:
+        """
+        Biomechanical Goalkeeper Save Engine:
+        Checks if ball pixel coordinates touch or collide with Goalkeeper wrist/hand keypoints (COCO #9 & #10).
+        """
+        if ball_pixel is None or not gk_pose_data:
+            return False
+
+        bx, by = ball_pixel
+        for gk_id, pdata in gk_pose_data.items():
+            kps = pdata.get('keypoints')
+            if kps is None:
+                continue
+
+            # Keypoints #9 (Left Wrist), #10 (Right Wrist), #7 (Left Elbow), #8 (Right Elbow)
+            save_keypoints = [9, 10, 7, 8]
+            for kp_idx in save_keypoints:
+                if kps[kp_idx, 2] > 0.3:  # Valid keypoint confidence
+                    kx, ky = kps[kp_idx, 0], kps[kp_idx, 1]
+                    dist = np.sqrt((bx - kx)**2 + (by - ky)**2)
+                    if dist <= 45.0:  # Ball within 45px of Goalkeeper wrist/elbow
+                        return True
+        return False
+
     def _check_goal_hybrid(
         self,
         ball_pixel:      Optional[Tuple[float, float]],

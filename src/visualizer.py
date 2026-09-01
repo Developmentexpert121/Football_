@@ -196,7 +196,7 @@ class Visualizer:
 
         # 1. Draw Pose Skeletons
         if self.draw_pose and pose_data:
-            self._draw_pose_skeletons(annotated, pose_data, team_assignments)
+            self._draw_pose_skeletons(annotated, pose_data, team_assignments, tracks)
 
         # 2. Draw Smoothed Ball indicator
         if smoothed_ball is not None and smoothed_ball.get('interpolated', False):
@@ -464,18 +464,25 @@ class Visualizer:
         self,
         frame: np.ndarray,
         pose_data: Dict[int, Dict[str, Any]],
-        team_assignments: Dict[int, int]
+        team_assignments: Dict[int, int],
+        tracks: Optional[List[Dict[str, Any]]] = None
     ):
         """
-        Draws pose skeleton overlays for all tracked players.
+        Draws pose skeleton overlays specifically for Goalkeepers.
         """
+        gk_track_ids = set()
+        if tracks:
+            gk_track_ids = {t['track_id'] for t in tracks if t.get('class_id') == 1}
+
         for t_id, pdata in pose_data.items():
+            if gk_track_ids and t_id not in gk_track_ids:
+                continue
+
             kps = pdata.get('keypoints')
             if kps is None:
                 continue
 
-            team_id = team_assignments.get(t_id, 0)
-            base_color = self.color_team_a if team_id == 0 else self.color_team_b
+            base_color = (0, 215, 255)  # Gold highlight for Goalkeeper skeleton
 
             # Draw skeleton edges
             for i, (start_idx, end_idx) in enumerate(SKELETON_EDGES):

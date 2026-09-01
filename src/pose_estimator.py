@@ -106,6 +106,11 @@ class PoseEstimator:
                 continue
 
             tracks = tracks_per_frame[frame_idx]
+            # Goalkeeper-Only Pose Filter: filter for class_id == 1
+            gk_tracks = [t for t in tracks if t['class_id'] == 1]
+            if not gk_tracks:
+                pose_per_frame.append({})
+                continue
 
             try:
                 results = self.model.predict(
@@ -128,10 +133,8 @@ class PoseEstimator:
                     pose_bboxes = result.boxes.xyxy.cpu().numpy()  # (N, 4)
                     keypoints_data = result.keypoints.data.cpu().numpy()  # (N, 17, 3)
 
-                    # Match each tracker bbox to the best-overlapping pose bbox
-                    for track in tracks:
-                        if track['class_id'] not in (0, 1):  # Only players and goalkeepers
-                            continue
+                    # Match tracker Goalkeeper bboxes to pose bboxes
+                    for track in gk_tracks:
 
                         t_id = track['track_id']
                         t_bbox = track['bbox']
