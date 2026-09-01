@@ -60,26 +60,38 @@ class MultiObjectTracker:
 
     def _update_tracks_for_frame(self, detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Associates detections to active tracks using IoU matching.
+        Associates detections to active tracks using Class-Consistent IoU + Center Distance matching.
         """
         frame_tracks = []
         unmatched_detections = list(detections)
 
-        # Simple greedy IoU matching between existing tracks and new detections
-        matched_track_ids = set()
-
         for track_id, track_data in list(self.active_tracks.items()):
-            best_iou = 0.0
+            best_score = 0.0
             best_det_idx = -1
             prev_bbox = track_data['bbox']
+            prev_cls = track_data['class_id']
+            prev_cx = (prev_bbox[0] + prev_bbox[2]) / 2.0
+            prev_cy = (prev_bbox[1] + prev_bbox[3]) / 2.0
 
             for det_idx, det in enumerate(unmatched_detections):
+                # Prefer same class (e.g. ball stays ball, player stays player)
+                class_bonus = 0.2 if det['class_id'] == prev_cls else -0.3
                 iou = self._compute_iou(prev_bbox, det['bbox'])
-                if iou > best_iou:
-                    best_iou = iou
+                
+                # Center distance normalized by bbox size
+                w = max(10, prev_bbox[2] - prev_bbox[0])
+                h = max(10, prev_bbox[3] - prev_bbox[1])
+                curr_cx = (det['bbox'][0] + det['bbox'][2]) / 2.0
+                curr_cy = (det['bbox'][1] + det['bbox'][3]) / 2.0
+                dist_norm = np.sqrt(((curr_cx - prev_cx) / w)**2 + ((curr_cy - prev_cy) / h)**2)
+                dist_score = max(0.0, 1.0 - dist_norm)
+
+                match_score = iou + class_bonus + (dist_score * 0.15)
+                if match_score > best_score:
+                    best_score = match_score
                     best_det_idx = det_idx
 
-            if best_iou >= 0.3 and best_det_idx >= 0:
+            if best_score >= 0.25 and best_det_idx >= 0:
                 det = unmatched_detections.pop(best_det_idx)
                 self.active_tracks[track_id] = {
                     'bbox': det['bbox'],
@@ -87,7 +99,6 @@ class MultiObjectTracker:
                     'conf': det['conf'],
                     'lost_count': 0
                 }
-                matched_track_ids.add(track_id)
                 frame_tracks.append({
                     'track_id': track_id,
                     'bbox': det['bbox'],
