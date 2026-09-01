@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://conditions-unix-charitable-bra.trycloudflare.com',
+        target: 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'https://conditions-unix-charitable-bra.trycloudflare.com',
+        target: 'http://localhost:8000',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
