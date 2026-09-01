@@ -679,20 +679,8 @@ class Visualizer:
             self._draw_3d_goal_wireframe(frame, goal_3d, label, is_goal_flash)
             return
 
-        # ── Fallback: flat polygon ──────────────────────────
-        if not polygon or len(polygon) < 3:
-            return
-
-        pts = np.array(polygon, dtype=np.int32)
-        overlay = frame.copy()
-        if is_goal_flash:
-            cv2.fillPoly(overlay, [pts], (0, 255, 0))
-            cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, frame)
-        else:
-            cv2.fillPoly(overlay, [pts], (200, 255, 200))
-            cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
-        border_color = (0, 255, 0) if is_goal_flash else (0, 255, 255)
-        cv2.polylines(frame, [pts], True, border_color, 2)
+        # Disable static fallback boxes at screen edges
+        return
 
     def _draw_3d_goal_wireframe(
         self,
