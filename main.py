@@ -154,7 +154,9 @@ def run_pipeline(
     if progress_callback: progress_callback("Perspective Transform (Homography)", 45)
     homography = HomographyTransformer(
         pitch_length=cfg.get("pitch.length_meters", 105.0),
-        pitch_width=cfg.get("pitch.width_meters", 68.0)
+        pitch_width=cfg.get("pitch.width_meters", 68.0),
+        ref_image_points=cfg.get("pitch.reference_points_image", None),
+        ref_pitch_points=cfg.get("pitch.reference_points_pitch", None)
     )
     metric_positions_per_frame = []
     for frame_idx, tracks in enumerate(tracks_per_frame):
@@ -298,6 +300,36 @@ def run_pipeline(
         raw_frames=action_frames
     )
 
+    # ── EXCLUSIVE GOAL DETECTION VIA GOALDETECTOR POC REPO ────────────
+    print("\n[Stage 12B/14] Running GoalDetector POC Repo for Exclusive Goal Detection...")
+    try:
+        from src.abhishek_goal_detector import GoalDetector
+        abhishek_gd = GoalDetector(
+            video_path=input_video_path,
+            conf_threshold=cfg.get("detector.confidence_threshold", 0.25),
+            debug_mode=False,
+            visualization=False
+        )
+        detected_poc_goals = abhishek_gd.process_video()
+        
+        # Remove any non-POC goal events and insert POC goals exclusively
+        events = [e for e in events if e.get('event_type') != 'Goal']
+        for g in detected_poc_goals:
+            g_frame = g['frame_number']
+            events.append({
+                'frame_idx': g_frame,
+                'timestamp': g['formatted_time'],
+                'timestamp_sec': round(g['timestamp'], 2),
+                'event_type': 'Goal',
+                'players_involved': [],
+                'teams_involved': [0],
+                'confidence': 0.95,
+                'description': f"Goal Detected (POC Engine) at {g['formatted_time']} (Frame {g_frame})"
+            })
+        print(f"[Stage 12B] Total Goals Detected exclusively by POC Engine: {len(detected_poc_goals)}")
+    except Exception as e:
+        print(f"[Stage 12B Warning] GoalDetector POC execution fallback: {e}")
+
     # Build per-frame event index for visualization
     events_by_frame = {}
     for evt in events:
@@ -340,7 +372,8 @@ def run_pipeline(
         right_goal_polygon=cfg.get("event_detector.right_goal_polygon", None),
         left_net_roi=cfg.get("event_detector.left_net_roi", None),
         right_net_roi=cfg.get("event_detector.right_net_roi", None),
-        reference_points_image=cfg.get("pitch.reference_points_image", None)
+        reference_points_image=cfg.get("pitch.reference_points_image", None),
+        reference_points_pitch=cfg.get("pitch.reference_points_pitch", None)
     )
 
     # Initialize VideoWriter for streaming frame-by-frame disk write (prevents RAM buffering)
