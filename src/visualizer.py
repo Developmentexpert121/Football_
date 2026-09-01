@@ -374,13 +374,13 @@ class Visualizer:
                 goal_evt = next((e for e in events_this_frame if e.get('event_type') == 'Goal'), None)
                 self._goal_flash_side = goal_evt.get('goal_side', 'left') if goal_evt else 'left'
 
-            # Draw goal polygons when ball is near goal area
-            ball_near_left = False
-            ball_near_right = False
+            # Draw goal polygons when camera/ball is in penalty zone
+            ball_near_left = True
+            ball_near_right = True
             if ball_metric_pos is not None:
                 bx = ball_metric_pos[0]
-                ball_near_left = bx < 25.0
-                ball_near_right = bx > (self.pitch_length - 25.0)
+                ball_near_left = bx < 35.0
+                ball_near_right = bx > (self.pitch_length - 35.0)
 
             if ball_near_left or self._goal_flash_counter > 0:
                 self._draw_goal_polygon_on_frame(
