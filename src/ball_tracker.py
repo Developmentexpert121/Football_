@@ -113,12 +113,26 @@ def smooth_ball_trajectory(
     smoothed_ball_per_frame: List[Optional[Dict[str, Any]]] = []
 
     for frame_tracks in tracks_per_frame:
-        # Find ball detection in this frame
+        # Handle single vs multiple ball candidates per frame
+        ball_candidates = [t for t in frame_tracks if t['class_id'] == 3]
         ball_track = None
-        for track in frame_tracks:
-            if track['class_id'] == 3:  # Ball
-                ball_track = track
-                break
+        
+        if len(ball_candidates) == 1:
+            ball_track = ball_candidates[0]
+        elif len(ball_candidates) > 1:
+            # Pick candidate closest to Kalman predicted state (or highest confidence)
+            if kf.is_initialized and kf.x is not None:
+                pred_cx, pred_cy = kf.x[0, 0], kf.x[1, 0]
+                best_dist = float('inf')
+                for cand in ball_candidates:
+                    x1, y1, x2, y2 = cand['bbox']
+                    ccx, ccy = (x1 + x2)/2.0, (y1 + y2)/2.0
+                    d = (ccx - pred_cx)**2 + (ccy - pred_cy)**2
+                    if d < best_dist:
+                        best_dist = d
+                        ball_track = cand
+            else:
+                ball_track = max(ball_candidates, key=lambda c: c.get('conf', 0.0))
 
         raw_cx, raw_cy = None, None
         raw_bbox = None

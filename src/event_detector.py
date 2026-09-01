@@ -1043,7 +1043,12 @@ class EventDetector:
             total = max(total, 0.82)
             reasons.append("RIPPLE_CONFIRM")
 
-        has_net_evidence = 'ground' in signals or 'pixel' in signals
+        has_net_evidence = (
+            'ground' in signals or
+            'pixel' in signals or
+            'trajectory' in signals or
+            (is_airborne and 'velocity' in signals and (X_g <= 3.2 or X_g >= 101.8) and is_within_y)
+        )
         confirmed = total >= THRESHOLD and has_net_evidence
         side_str  = goal_side
         desc      = (f"GoalFusion({side_str}): "
