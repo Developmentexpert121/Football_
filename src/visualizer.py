@@ -84,7 +84,7 @@ class Visualizer:
         self.draw_pose = draw_pose
         self.draw_actions = draw_actions
         self.draw_jersey = draw_jersey
-        self.draw_goal_overlay = draw_goal_overlay
+        self.draw_goal_overlay = False  # Disabled static goal overlay to prevent screen clutter during camera angle changes
         self.draw_debug_coordinates = draw_debug_coordinates
 
         # Net ROI pixel coordinates [x1, y1, x2, y2]
@@ -793,13 +793,7 @@ class Visualizer:
         cv2.circle(frame, plb, 4, post_color, -1)
         cv2.circle(frame, prb, 4, post_color, -1)
 
-        # ── 10. Goal label ──
-        cx = (plb[0] + prb[0]) // 2
-        cy = (plt_[1] + prt[1]) // 2 - 12
-        cv2.putText(frame, label, (cx - 35, cy),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2, cv2.LINE_AA)
-
-        # ── 11. GOAL! flash big text on screen ──
+        # ── 10. GOAL! flash big text on screen ──
         if is_goal_flash:
             h, w = frame.shape[:2]
             # Draw "GOAL!" on crossbar area
