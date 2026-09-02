@@ -65,17 +65,17 @@ export default function MatchAnalysis() {
   const videoRef = useRef()
 
   const handleDownloadVideo = (targetUrl) => {
-    if (!targetUrl) return
+    if (!targetUrl || downloading) return
+    setDownloading(true)
     const filename = targetUrl.split('/').pop() || `match_${jobId}_annotated.mp4`
     const downloadEndpoint = `/api/download/${filename}`
     
-    // Direct attachment trigger -> opens native browser download manager instantly
-    const link = document.createElement('a')
-    link.href = downloadEndpoint
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    // Instant browser native download trigger
+    window.location.href = downloadEndpoint
+    
+    setTimeout(() => {
+      setDownloading(false)
+    }, 3000)
   }
 
   const loadCompletedData = async () => {
