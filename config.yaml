@@ -8,8 +8,8 @@ project:
   version: "2.0.0"
 
 paths:
-  input_video: "data/input_videos/match_01.mp4"
-  output_video: "data/output_videos/match_01_annotated.mp4"
+  input_video: "data/input_videos/upload_d0591206.mp4"
+  output_video: "data/output_videos/match_d0591206_annotated.mp4"
   model_weights: "models/weights/best.pt"
   fallback_weights: "yolov8x.pt"
   stubs_dir: "stubs"
@@ -158,14 +158,14 @@ event_detector:
   # [Left_Post_Base, Right_Post_Base, Right_Post_Top, Left_Post_Top]
   left_goal_polygon:
     - [97, 392]    # P1: Left Post Base
-    - [150, 392]   # P2: Right Post Base / Net Depth
-    - [150, 230]   # P3: Right Post Top (Crossbar)
-    - [97, 230]    # P4: Left Post Top (Crossbar)
+    - [50, 392]    # P2: Left Back of Net / Depth
+    - [50, 230]    # P3: Right Back of Net / Depth
+    - [97, 230]    # P4: Right Post Top (Crossbar)
   right_goal_polygon:
-    - [1129, 392]  # P1: Left Post Base / Net Depth
+    - [1230, 392]  # P1: Left Back of Net / Depth
     - [1182, 392]  # P2: Right Post Base
     - [1182, 230]  # P3: Right Post Top (Crossbar)
-    - [1129, 230]  # P4: Left Post Top (Crossbar)
+    - [1230, 230]  # P4: Right Back of Net / Depth
   consecutive_goal_frames: 2
   ball_ground_diameter_px: 28.0
   left_net_roi: [50, 210, 160, 420]

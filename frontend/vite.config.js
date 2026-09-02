@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://submission-ste-loads-gradually.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'http://localhost:8000',
+        target: 'https://submission-ste-loads-gradually.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,

@@ -36,10 +36,10 @@ class GoalDetector:
         # Load YOLOv5 model
         if model_path:
             print(f"Loading custom model from {model_path}")
-            self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path)
+            self.model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, trust_repo=True)
         else:
             print("Loading YOLOv5s model...")
-            self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s')
+            self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s', trust_repo=True)
         
         # Set model parameters
         self.model.conf = conf_threshold  # Confidence threshold
