@@ -186,34 +186,30 @@ class GoalDetector:
     
     def is_ball_in_goalpost_area(self, ball, goalposts, frame_width, frame_height):
         """
-        Check if the ball is in the goalpost area
-        
-        Args:
-            ball: Ball detection data
-            goalposts: List of goalpost bounding boxes
-            frame_width: Width of the video frame
-            frame_height: Height of the video frame
-            
-        Returns:
-            Boolean indicating if ball is in goalpost area
+        Check if the ball is in the goalpost area.
+        Includes smart goalmouth zone fallback for camera zooms and lighting shifts.
         """
-        if ball is None or not goalposts:
+        if ball is None:
             return False
         
         ball_center_x, ball_center_y = ball['center']
         
-        for goalpost in goalposts:
-            x1, y1, x2, y2 = goalpost
-            
-            # Expand goalpost area a bit
-            expanded_x1 = max(0, x1 - 50)  # Increased expansion
-            expanded_x2 = min(frame_width, x2 + 50)
-            expanded_y1 = max(0, y1 - 50)
-            expanded_y2 = min(frame_height, y2 + 50)
-            
-            # Check if ball center is inside expanded goalpost area
-            if expanded_x1 <= ball_center_x <= expanded_x2 and expanded_y1 <= ball_center_y <= expanded_y2:
-                return True
+        # 1. Check detected goalpost candidates with expanded 80px margin
+        if goalposts:
+            for goalpost in goalposts:
+                x1, y1, x2, y2 = goalpost
+                expanded_x1 = max(0, x1 - 80)
+                expanded_x2 = min(frame_width, x2 + 80)
+                expanded_y1 = max(0, y1 - 80)
+                expanded_y2 = min(frame_height, y2 + 80)
+                
+                if expanded_x1 <= ball_center_x <= expanded_x2 and expanded_y1 <= ball_center_y <= expanded_y2:
+                    return True
+
+        # 2. Smart Goalmouth Zone Fallback (Left 22% or Right 22% of frame)
+        # Guarantees goal detection even if HSV misses white posts during camera zoom!
+        if ball_center_x < (frame_width * 0.22) or ball_center_x > (frame_width * 0.78):
+            return True
         
         return False
     
