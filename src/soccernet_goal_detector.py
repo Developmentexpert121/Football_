@@ -80,6 +80,7 @@ class SoccerNetGoalDetector:
         peak_min_distance_frames: int = 15,
         replay_merge_seconds: float = 45.0,
         batch_size: int = 4,
+        **kwargs  # Accept any extra kwargs like model_name gracefully
     ):
         self.checkpoint_path = checkpoint_path
         self.repo_path = repo_path
@@ -96,20 +97,6 @@ class SoccerNetGoalDetector:
     def _load_model(self):
         if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
-        try:
-            from src.models.multidim_stacker import MultiDimStacker
-        except ImportError as e:
-            raise ImportError(
-                f"Failed to import MultiDimStacker from {self.repo_path}.\n"
-                f"Ensure ball-action-spotting is cloned there.\nError: {e}"
-            )
-
-        model = MultiDimStacker(
-            num_classes=len(SOCCERNET_CLASSES),
-            num_frames=STACKS_PER_SEQUENCE,
-            num_channels=FRAMES_PER_STACK,
-            encoder_name="tf_efficientnetv2_b0",
-        )
 
         if not os.path.exists(self.checkpoint_path):
             raise FileNotFoundError(
@@ -117,17 +104,57 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector] Loading: {self.checkpoint_path}")
-        checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
-        if isinstance(checkpoint, dict):
-            state_dict = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
-        else:
-            state_dict = checkpoint
-        model.load_state_dict(state_dict, strict=False)
-        model.to(self.device)
-        model.eval()
-        print(f"[SoccerNetGoalDetector] Model loaded ({len(SOCCERNET_CLASSES)} classes)")
-        return model
+        print(f"[SoccerNetGoalDetector] Loading checkpoint: {self.checkpoint_path}")
+
+        # Method 1: Load via argus.load_model (Native for lRomul/ball-action-spotting checkpoints)
+        try:
+            import argus
+            model = argus.load_model(self.checkpoint_path, device=str(self.device))
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
+            return model
+        except Exception as e:
+            print(f"[SoccerNetGoalDetector] argus.load_model notice: {e}")
+
+        # Method 2: Manual MultiDimStacker PyTorch state_dict load fallback
+        try:
+            from src.models.multidim_stacker import MultiDimStacker
+            try:
+                model = MultiDimStacker(
+                    num_classes=len(SOCCERNET_CLASSES),
+                    num_frames=STACKS_PER_SEQUENCE,
+                    num_channels=FRAMES_PER_STACK,
+                    encoder_name="tf_efficientnetv2_b0",
+                )
+            except TypeError:
+                params = {
+                    'nn_module': {
+                        'num_classes': len(SOCCERNET_CLASSES),
+                        'num_frames': STACKS_PER_SEQUENCE,
+                        'num_channels': FRAMES_PER_STACK,
+                        'encoder_name': "tf_efficientnetv2_b0",
+                    }
+                }
+                model = MultiDimStacker(params)
+
+            checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+            if isinstance(checkpoint, dict):
+                state_dict = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
+            else:
+                state_dict = checkpoint
+
+            if hasattr(model, 'load_state_dict'):
+                model.load_state_dict(state_dict, strict=False)
+                model.to(self.device)
+                model.eval()
+            elif hasattr(model, 'nn_module'):
+                model.nn_module.load_state_dict(state_dict, strict=False)
+                model.nn_module.to(self.device)
+                model.nn_module.eval()
+
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via PyTorch state_dict")
+            return model
+        except Exception as e2:
+            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e2}")
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
@@ -176,14 +203,38 @@ class SoccerNetGoalDetector:
         n = len(sequences)
         print(f"[SoccerNetGoalDetector] Running inference on {n} frames...")
         t0 = time.time()
-        with torch.no_grad():
-            for start in range(0, n, self.batch_size):
-                batch = torch.stack(sequences[start: start + self.batch_size], dim=0).to(self.device)
-                logits = self.model(batch)
-                probs = torch.sigmoid(logits).cpu().numpy()
-                all_scores.append(probs)
-                if (start // self.batch_size) % 100 == 0:
-                    print(f"  [{min(start+self.batch_size, n)}/{n}] {time.time()-t0:.1f}s")
+
+        if hasattr(self.model, 'predict'):
+            with torch.no_grad():
+                for start in range(0, n, self.batch_size):
+                    batch = torch.stack(sequences[start: start + self.batch_size], dim=0).to(self.device)
+                    res = self.model.predict(batch)
+                    if isinstance(res, torch.Tensor):
+                        probs = torch.sigmoid(res).cpu().numpy()
+                    elif isinstance(res, np.ndarray):
+                        if res.max() > 1.0 or res.min() < 0.0:
+                            probs = 1.0 / (1.0 + np.exp(-res))
+                        else:
+                            probs = res
+                    all_scores.append(probs)
+                    if (start // self.batch_size) % 100 == 0:
+                        print(f"  [{min(start+self.batch_size, n)}/{n}] {time.time()-t0:.1f}s")
+        else:
+            nn_module = getattr(self.model, 'nn_module', self.model)
+            if hasattr(nn_module, 'eval'):
+                nn_module.eval()
+            with torch.no_grad():
+                for start in range(0, n, self.batch_size):
+                    batch = torch.stack(sequences[start: start + self.batch_size], dim=0).to(self.device)
+                    logits = nn_module(batch)
+                    if isinstance(logits, torch.Tensor):
+                        probs = torch.sigmoid(logits).cpu().numpy()
+                    elif isinstance(logits, np.ndarray):
+                        probs = 1.0 / (1.0 + np.exp(-logits))
+                    all_scores.append(probs)
+                    if (start // self.batch_size) % 100 == 0:
+                        print(f"  [{min(start+self.batch_size, n)}/{n}] {time.time()-t0:.1f}s")
+
         all_scores = np.concatenate(all_scores, axis=0)
         print(f"[SoccerNetGoalDetector] Inference done in {time.time()-t0:.1f}s")
         return all_scores
