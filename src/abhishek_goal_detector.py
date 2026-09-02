@@ -510,13 +510,20 @@ class GoalDetector:
                 timestamp = frame_count / fps
                 formatted_time = time.strftime('%M:%S', time.gmtime(timestamp))
                 
-                print(f"Goal detected at {formatted_time} (frame {frame_count})")
+                # Determine goal side based on ball position or frame center
+                goal_side = 'right'
+                if current_ball and current_ball.get('center'):
+                    if current_ball['center'][0] < (frame_width / 2.0):
+                        goal_side = 'left'
+
+                print(f"Goal detected at {formatted_time} (frame {frame_count}, {goal_side} net)")
                 
                 # Save goal event details
                 self.detected_goals.append({
                     'timestamp': timestamp,
                     'formatted_time': formatted_time,
-                    'frame_number': frame_count
+                    'frame_number': frame_count,
+                    'goal_side': goal_side
                 })
                 
                 # Save a clip of the goal

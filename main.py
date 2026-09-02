@@ -316,15 +316,18 @@ def run_pipeline(
         events = [e for e in events if e.get('event_type') != 'Goal']
         for g in detected_poc_goals:
             g_frame = g['frame_number']
+            g_side = g.get('goal_side', 'right')
+            scoring_team = 0 if g_side == 'right' else 1
             events.append({
                 'frame_idx': g_frame,
                 'timestamp': g['formatted_time'],
                 'timestamp_sec': round(g['timestamp'], 2),
                 'event_type': 'Goal',
+                'goal_side': g_side,
                 'players_involved': [],
-                'teams_involved': [0],
+                'teams_involved': [scoring_team],
                 'confidence': 0.95,
-                'description': f"Goal Detected (POC Engine) at {g['formatted_time']} (Frame {g_frame})"
+                'description': f"Goal Detected ({g_side.upper()} Net) at {g['formatted_time']} by Team {scoring_team}"
             })
         print(f"[Stage 12B] Total Goals Detected exclusively by POC Engine: {len(detected_poc_goals)}")
     except Exception as e:
