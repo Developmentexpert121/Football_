@@ -134,7 +134,8 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     output_path = os.path.join("data", "output_videos", f"match_{job_id}_annotated.mp4")
 
     with open(input_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        while chunk := await file.read(1024 * 1024):
+            buffer.write(chunk)
 
     init_log = f"[{time.strftime('%H:%M:%S')}] [5%] Video Uploaded: {file.filename}. Queued for 18-stage analysis..."
     JOBS[job_id] = {
