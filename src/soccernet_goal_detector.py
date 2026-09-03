@@ -73,14 +73,14 @@ class SoccerNetGoalDetector:
     def __init__(
         self,
         checkpoint_path: str,
-        repo_path: str,
+        repo_path: str = "/content/ball-action-spotting",
         device: str = "cuda",
         gaussian_sigma: float = 3.0,
         peak_min_height: float = 0.2,
         peak_min_distance_frames: int = 15,
         replay_merge_seconds: float = 45.0,
         batch_size: int = 4,
-        **kwargs  # Accept any extra kwargs like model_name gracefully
+        **kwargs
     ):
         self.checkpoint_path = checkpoint_path
         self.repo_path = repo_path
@@ -95,9 +95,6 @@ class SoccerNetGoalDetector:
         self.model = self._load_model()
 
     def _load_model(self):
-        if self.repo_path not in sys.path:
-            sys.path.insert(0, self.repo_path)
-
         if not os.path.exists(self.checkpoint_path):
             raise FileNotFoundError(
                 f"Checkpoint not found: {self.checkpoint_path}\n"
@@ -106,55 +103,58 @@ class SoccerNetGoalDetector:
 
         print(f"[SoccerNetGoalDetector] Loading checkpoint: {self.checkpoint_path}")
 
-        # Method 1: Load via argus.load_model (Native for lRomul/ball-action-spotting checkpoints)
+        # Save sys.path and sys.modules state to isolate ball-action-spotting imports
+        saved_sys_path = list(sys.path)
+        saved_src_module = sys.modules.get('src')
+
         try:
+            # Prioritize repo_path at index 0 of sys.path
+            sys.path = [p for p in sys.path if p not in [self.repo_path, '/content/Football_']]
+            sys.path.insert(0, self.repo_path)
+
+            # Evict 'src' from sys.modules so Python loads ball-action-spotting's src package
+            for mod in list(sys.modules.keys()):
+                if mod == 'src' or mod.startswith('src.'):
+                    del sys.modules[mod]
+
+            # Import ball-action-spotting model registry to populate argus.MODEL_REGISTRY
+            try:
+                import src.models
+            except Exception as e_mod:
+                print(f"[SoccerNetGoalDetector] Notice loading src.models: {e_mod}")
+
             import argus
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
             print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
             return model
+
         except Exception as e:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e}")
-
-        # Method 2: Manual MultiDimStacker PyTorch state_dict load fallback
-        try:
-            from src.models.multidim_stacker import MultiDimStacker
+            # Fallback PyTorch direct state dict load
             try:
-                model = MultiDimStacker(
-                    num_classes=len(SOCCERNET_CLASSES),
-                    num_frames=STACKS_PER_SEQUENCE,
-                    num_channels=FRAMES_PER_STACK,
-                    encoder_name="tf_efficientnetv2_b0",
-                )
-            except TypeError:
-                params = {
-                    'nn_module': {
-                        'num_classes': len(SOCCERNET_CLASSES),
-                        'num_frames': STACKS_PER_SEQUENCE,
-                        'num_channels': FRAMES_PER_STACK,
-                        'encoder_name': "tf_efficientnetv2_b0",
-                    }
-                }
-                model = MultiDimStacker(params)
+                import argus
+                checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
+                if isinstance(checkpoint, dict) and 'model' in checkpoint:
+                    model = checkpoint['model']
+                elif isinstance(checkpoint, dict) and 'params' in checkpoint:
+                    params = checkpoint['params']
+                    model_cls = argus.MODEL_REGISTRY.get('default')
+                    model = model_cls(params)
+                    if 'model_state_dict' in checkpoint:
+                        model.load_state_dict(checkpoint['model_state_dict'])
+                else:
+                    raise RuntimeError(f"Unknown checkpoint structure: {type(checkpoint)}")
+                
+                print(f"[SoccerNetGoalDetector] ✅ Model loaded via fallback argus registry")
+                return model
+            except Exception as e2:
+                raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e2}")
 
-            checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
-            if isinstance(checkpoint, dict):
-                state_dict = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
-            else:
-                state_dict = checkpoint
-
-            if hasattr(model, 'load_state_dict'):
-                model.load_state_dict(state_dict, strict=False)
-                model.to(self.device)
-                model.eval()
-            elif hasattr(model, 'nn_module'):
-                model.nn_module.load_state_dict(state_dict, strict=False)
-                model.nn_module.to(self.device)
-                model.nn_module.eval()
-
-            print(f"[SoccerNetGoalDetector] ✅ Model loaded via PyTorch state_dict")
-            return model
-        except Exception as e2:
-            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e2}")
+        finally:
+            # Restore sys.path and sys.modules
+            sys.path = saved_sys_path
+            if saved_src_module is not None:
+                sys.modules['src'] = saved_src_module
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
