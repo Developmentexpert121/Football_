@@ -303,6 +303,7 @@ def run_pipeline(
     # ── GOAL DETECTION PIPELINE (SOCCERNET + GOALDETECTOR POC) ────────────
     print("\n[Stage 12B/14] Running SoccerNet Goal Detector & POC Engine...")
     try:
+        import torch
         import glob
         import time
         from src.soccernet_goal_detector import SoccerNetGoalDetector

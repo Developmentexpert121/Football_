@@ -508,6 +508,7 @@ class GoalDetector:
                 
                 # Determine goal side based on ball position or frame center
                 goal_side = 'right'
+                current_ball = current_detections.get('ball', None)
                 if current_ball and current_ball.get('center'):
                     if current_ball['center'][0] < (frame_width / 2.0):
                         goal_side = 'left'
