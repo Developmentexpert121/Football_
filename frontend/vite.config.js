@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://submission-ste-loads-gradually.trycloudflare.com',
+        target: 'https://races-loads-cash-tubes.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'https://submission-ste-loads-gradually.trycloudflare.com',
+        target: 'https://races-loads-cash-tubes.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
