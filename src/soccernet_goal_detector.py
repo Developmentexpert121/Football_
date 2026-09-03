@@ -104,11 +104,14 @@ class SoccerNetGoalDetector:
 
         print(f"[SoccerNetGoalDetector] Loading checkpoint: {self.checkpoint_path}")
 
-        # Ensure repo_path is in sys.path
+        # 1. Ensure repo_path is in sys.path
         if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
 
-        # Import all .py files in repo_path/src via spec_from_file_location to populate argus.MODEL_REGISTRY
+        # 2. Import argus FIRST so argus.MODEL_REGISTRY is ready
+        import argus
+
+        # 3. Load all .py files in repo_path/src via spec_from_file_location to populate argus.MODEL_REGISTRY
         ball_src = os.path.join(self.repo_path, "src")
         if os.path.exists(ball_src):
             for root, _, files in os.walk(ball_src):
@@ -125,15 +128,33 @@ class SoccerNetGoalDetector:
                         except Exception:
                             pass
 
-        # Load model using PyTorch Argus framework
+        print(f"[SoccerNetGoalDetector] Registered Argus models: {list(argus.MODEL_REGISTRY.keys())}")
+
+        # 4. Load model using PyTorch Argus framework
         try:
-            import argus
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
             print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
             return model
         except Exception as e:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e}")
-            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e}")
+            # Fallback manual reconstruction if checkpoint is standard torch file
+            try:
+                chk = torch.load(self.checkpoint_path, map_location=self.device)
+                model_name = chk.get('model_name', 'default') if isinstance(chk, dict) else 'default'
+                model_cls = argus.MODEL_REGISTRY.get(model_name)
+                if model_cls is None and len(argus.MODEL_REGISTRY) > 0:
+                    model_cls = list(argus.MODEL_REGISTRY.values())[0]
+
+                if model_cls is not None:
+                    if isinstance(chk, dict) and 'params' in chk:
+                        model = model_cls(chk['params'], device=str(self.device))
+                        model.load_state_dict(chk, strict=False)
+                        print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus model_cls")
+                        return model
+
+                raise RuntimeError(f"Could not resolve argus model class: {model_name}")
+            except Exception as e2:
+                raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e2}")
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
