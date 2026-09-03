@@ -91,7 +91,7 @@ class SoccerNetGoalDetector:
         self.replay_merge_seconds = replay_merge_seconds
         self.batch_size = batch_size
 
-        print(f"[SoccerNetGoalDetector v2.3] Device: {self.device}")
+        print(f"[SoccerNetGoalDetector v2.4] Device: {self.device}")
         self.model = self._load_model()
 
     def _load_model(self):
@@ -101,34 +101,39 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v2.3] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v2.4] Loading checkpoint: {self.checkpoint_path}")
 
-        # Ensure repo_path and repo_path/src are in sys.path
+        # 1. Add repo_path and repo_src to sys.path
         if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
         repo_src = os.path.join(self.repo_path, "src")
         if repo_src not in sys.path:
             sys.path.insert(0, repo_src)
 
+        # 2. Patch sys.modules['src'].__path__ so 'from src.models...' finds ball-action-spotting/src/models
+        if 'src' in sys.modules and hasattr(sys.modules['src'], '__path__'):
+            if repo_src not in sys.modules['src'].__path__:
+                sys.modules['src'].__path__.insert(0, repo_src)
+
         import argus
 
-        # Import all .py modules in repo_path/src so Argus models register
-        if os.path.exists(repo_src):
-            for root, _, files in os.walk(repo_src):
-                for file in files:
-                    if file.endswith(".py") and not file.startswith("__"):
-                        full_p = os.path.join(root, file)
-                        rel_p = os.path.relpath(full_p, self.repo_path)
-                        mod_name = rel_p.replace(os.sep, ".").rstrip(".py")
-                        try:
-                            spec = importlib.util.spec_from_file_location(mod_name, full_p)
-                            mod = importlib.util.module_from_spec(spec)
-                            sys.modules[mod_name] = mod
-                            spec.loader.exec_module(mod)
-                        except Exception:
-                            pass
+        # 3. Import src.argus_models directly from ball-action-spotting
+        try:
+            import src.argus_models
+            from src.argus_models import BallActionModel
+            print("[SoccerNetGoalDetector] ✅ Successfully registered src.argus_models.BallActionModel")
+        except Exception as e_imp:
+            print(f"[SoccerNetGoalDetector] Notice importing src.argus_models: {e_imp}")
 
-        # Method 1: Direct instantiation via BallActionModel class
+        # 4. Load model using argus.load_model
+        try:
+            model = argus.load_model(self.checkpoint_path, device=str(self.device))
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
+            return model
+        except Exception as e_argus:
+            print(f"[SoccerNetGoalDetector] argus.load_model notice: {e_argus}")
+
+        # 5. Direct BallActionModel fallback
         try:
             from src.argus_models import BallActionModel
             chk = torch.load(self.checkpoint_path, map_location=self.device)
@@ -136,18 +141,10 @@ class SoccerNetGoalDetector:
             model = BallActionModel(params, device=str(self.device))
             if isinstance(chk, dict) and 'model_state_dict' in chk:
                 model.load_state_dict(chk['model_state_dict'])
-            print(f"[SoccerNetGoalDetector] ✅ Model loaded via BallActionModel ({len(SOCCERNET_CLASSES)} classes)")
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via direct BallActionModel")
             return model
         except Exception as e_direct:
-            print(f"[SoccerNetGoalDetector] Direct BallActionModel notice: {e_direct}")
-
-        # Method 2: argus.load_model fallback
-        try:
-            model = argus.load_model(self.checkpoint_path, device=str(self.device))
-            print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model")
-            return model
-        except Exception as e_argus:
-            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_argus}")
+            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_direct}")
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
