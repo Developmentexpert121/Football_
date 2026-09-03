@@ -308,11 +308,12 @@ def run_pipeline(
         from src.soccernet_goal_detector import SoccerNetGoalDetector
         
         # Discover model weights
-        weights_candidates = glob.glob("weights/**/model*.pth", recursive=True) + \
-                             glob.glob("weights/**/*.pth", recursive=True) + \
+        weights_candidates = glob.glob("models/weights/**/model*.pth", recursive=True) + \
+                             glob.glob("weights/**/model*.pth", recursive=True) + \
+                             glob.glob("**/model-019*.pth", recursive=True) + \
                              glob.glob("/content/weights/**/model*.pth", recursive=True)
         
-        soccernet_weights = weights_candidates[0] if weights_candidates else "weights/model-019-0.797827.pth"
+        soccernet_weights = weights_candidates[0] if weights_candidates else "models/weights/model-019-0.797827.pth"
         ball_repo_path = "/content/ball-action-spotting" if os.path.exists("/content/ball-action-spotting") else "ball-action-spotting"
         
         s_detector = SoccerNetGoalDetector(
