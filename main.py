@@ -308,13 +308,28 @@ def run_pipeline(
         import time
         from src.soccernet_goal_detector import SoccerNetGoalDetector
         
-        # Discover model weights
-        weights_candidates = glob.glob("models/weights/**/model*.pth", recursive=True) + \
-                             glob.glob("weights/**/model*.pth", recursive=True) + \
-                             glob.glob("**/model-019*.pth", recursive=True) + \
-                             glob.glob("/content/weights/**/model*.pth", recursive=True)
+        # Discover model weights across local, repo, and Colab directories
+        weights_search_paths = [
+            "models/weights/model-019-0.797827.pth",
+            "weights/model-019-0.797827.pth",
+            "/content/weights/model-019-0.797827.pth",
+            "/content/Football_/models/weights/model-019-0.797827.pth",
+        ]
         
-        soccernet_weights = weights_candidates[0] if weights_candidates else "models/weights/model-019-0.797827.pth"
+        soccernet_weights = None
+        for p in weights_search_paths:
+            if os.path.exists(p):
+                soccernet_weights = p
+                break
+                
+        if not soccernet_weights:
+            cands = glob.glob("**/model*.pth", recursive=True) + glob.glob("/content/**/*.pth", recursive=True)
+            if cands:
+                soccernet_weights = cands[0]
+            else:
+                soccernet_weights = "models/weights/model-019-0.797827.pth"
+
+        print(f"[Stage 12B] Using SoccerNet Model Checkpoint: {soccernet_weights}")
         ball_repo_path = "/content/ball-action-spotting" if os.path.exists("/content/ball-action-spotting") else "ball-action-spotting"
         
         s_detector = SoccerNetGoalDetector(
@@ -329,11 +344,11 @@ def run_pipeline(
         )
         detected_soccernet_goals = s_detector.detect(input_video_path)
 
+        # Always remove legacy/heuristic goal events before populating SoccerNet goals
+        events = [e for e in events if e.get('event_type') != 'Goal']
+
         if detected_soccernet_goals:
-            # Remove default goal events and insert SoccerNet goals with team attribution
-            events = [e for e in events if e.get('event_type') != 'Goal']
             fps = video_info.get('fps', 25.0)
-            
             for ts_sec, conf in detected_soccernet_goals:
                 g_frame = int(ts_sec * fps)
                 formatted_time = time.strftime('%M:%S', time.gmtime(ts_sec))
@@ -362,9 +377,11 @@ def run_pipeline(
                     'players_involved': [],
                     'teams_involved': [scoring_team],
                     'confidence': round(conf, 2),
-                    'description': f"Goal Scored ({g_side.upper()} Net) at {formatted_time} by Team {'A' if scoring_team == 0 else 'B'}"
+                    'description': f"Goal Scored ({g_side.upper()} Net) at {formatted_time} ({ts_sec:.1f}s) by Team {'A' if scoring_team == 0 else 'B'} — Conf: {conf:.1%}"
                 })
             print(f"[Stage 12B] Total Confirmed SoccerNet Goals: {len(detected_soccernet_goals)}")
+        else:
+            print("[Stage 12B] SoccerNet Goal Detector confirmed 0 goals for this clip.")
     except Exception as e:
         print(f"[Stage 12B Warning] SoccerNetGoalDetector fallback to POC: {e}")
         try:
