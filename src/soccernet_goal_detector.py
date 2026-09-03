@@ -91,7 +91,7 @@ class SoccerNetGoalDetector:
         self.replay_merge_seconds = replay_merge_seconds
         self.batch_size = batch_size
 
-        print(f"[SoccerNetGoalDetector v2.4] Device: {self.device}")
+        print(f"[SoccerNetGoalDetector v2.5] Device: {self.device}")
         self.model = self._load_model()
 
     def _load_model(self):
@@ -101,50 +101,52 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v2.4] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v2.5] Loading checkpoint: {self.checkpoint_path}")
 
-        # 1. Add repo_path and repo_src to sys.path
-        if self.repo_path not in sys.path:
-            sys.path.insert(0, self.repo_path)
-        repo_src = os.path.join(self.repo_path, "src")
-        if repo_src not in sys.path:
-            sys.path.insert(0, repo_src)
+        # Save sys.modules state for 'src'
+        saved_modules = {}
+        for k in list(sys.modules.keys()):
+            if k == 'src' or k.startswith('src.'):
+                saved_modules[k] = sys.modules.pop(k)
 
-        # 2. Patch sys.modules['src'].__path__ so 'from src.models...' finds ball-action-spotting/src/models
-        if 'src' in sys.modules and hasattr(sys.modules['src'], '__path__'):
-            if repo_src not in sys.modules['src'].__path__:
-                sys.modules['src'].__path__.insert(0, repo_src)
+        saved_sys_path = list(sys.path)
 
-        import argus
-
-        # 3. Import src.argus_models directly from ball-action-spotting
         try:
+            # Place ball-action-spotting at index 0 of sys.path
+            sys.path = [p for p in sys.path if p not in [self.repo_path, '/content/Football_']]
+            sys.path.insert(0, self.repo_path)
+
+            # Import ball-action-spotting modules cleanly
+            import src.models.multidim_stacker
+            import src.losses
+            import src.mixup
             import src.argus_models
             from src.argus_models import BallActionModel
-            print("[SoccerNetGoalDetector] ✅ Successfully registered src.argus_models.BallActionModel")
-        except Exception as e_imp:
-            print(f"[SoccerNetGoalDetector] Notice importing src.argus_models: {e_imp}")
 
-        # 4. Load model using argus.load_model
-        try:
+            import argus
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
             print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
             return model
+
         except Exception as e_argus:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e_argus}")
+            try:
+                from src.argus_models import BallActionModel
+                chk = torch.load(self.checkpoint_path, map_location=self.device)
+                params = chk['params'] if isinstance(chk, dict) and 'params' in chk else chk
+                model = BallActionModel(params, device=str(self.device))
+                if isinstance(chk, dict) and 'model_state_dict' in chk:
+                    model.load_state_dict(chk['model_state_dict'])
+                print(f"[SoccerNetGoalDetector] ✅ Model loaded via direct BallActionModel")
+                return model
+            except Exception as e_direct:
+                raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_direct}")
 
-        # 5. Direct BallActionModel fallback
-        try:
-            from src.argus_models import BallActionModel
-            chk = torch.load(self.checkpoint_path, map_location=self.device)
-            params = chk['params'] if isinstance(chk, dict) and 'params' in chk else chk
-            model = BallActionModel(params, device=str(self.device))
-            if isinstance(chk, dict) and 'model_state_dict' in chk:
-                model.load_state_dict(chk['model_state_dict'])
-            print(f"[SoccerNetGoalDetector] ✅ Model loaded via direct BallActionModel")
-            return model
-        except Exception as e_direct:
-            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_direct}")
+        finally:
+            # Restore sys.path and sys.modules for Football_
+            sys.path = saved_sys_path
+            for k, v in saved_modules.items():
+                sys.modules[k] = v
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
