@@ -22,6 +22,7 @@ NOTE: This module is 100% standalone. It does NOT modify main.py or any
 import os
 import sys
 import time
+import importlib.util
 import numpy as np
 import cv2
 from typing import List, Tuple, Optional
@@ -107,18 +108,22 @@ class SoccerNetGoalDetector:
         if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
 
-        # Extend 'src' package search path so Python finds both Football_/src AND ball-action-spotting/src
-        repo_src = os.path.join(self.repo_path, "src")
-        if os.path.exists(repo_src):
-            if 'src' in sys.modules and hasattr(sys.modules['src'], '__path__'):
-                if repo_src not in sys.modules['src'].__path__:
-                    sys.modules['src'].__path__.append(repo_src)
-
-        # Pre-import ball-action-spotting model definitions to register 'default' model in argus
-        try:
-            import src.models
-        except Exception as e_mod:
-            print(f"[SoccerNetGoalDetector] Notice pre-loading src.models: {e_mod}")
+        # Import all .py files in repo_path/src via spec_from_file_location to populate argus.MODEL_REGISTRY
+        ball_src = os.path.join(self.repo_path, "src")
+        if os.path.exists(ball_src):
+            for root, _, files in os.walk(ball_src):
+                for file in files:
+                    if file.endswith(".py") and not file.startswith("__"):
+                        full_p = os.path.join(root, file)
+                        rel_p = os.path.relpath(full_p, self.repo_path)
+                        mod_name = rel_p.replace(os.sep, ".").rstrip(".py")
+                        try:
+                            spec = importlib.util.spec_from_file_location(mod_name, full_p)
+                            mod = importlib.util.module_from_spec(spec)
+                            sys.modules[mod_name] = mod
+                            spec.loader.exec_module(mod)
+                        except Exception:
+                            pass
 
         # Load model using PyTorch Argus framework
         try:
