@@ -475,65 +475,6 @@ class EventDetector:
                             scoring_team = 1 if is_goal_left else 0
 
                         conceding_team = 1 - scoring_team
-                        scorer_j = (jersey_map.get(scorer_id, scorer_id)
-                                    if (jersey_map and scorer_id is not None and scorer_id in jersey_map) else (scorer_id if scorer_id is not None else "Unknown"))
-
-                        # ── Cooldown guard ────────────────────
-                        recent_goal = any(
-                            abs(e['frame_idx'] - frame_idx) < int(self.fps * 20.0)
-                            and e['event_type'] == 'Goal'
-                            for e in events
-                        )
-                        if not recent_goal:
-
-                            # ── ±5 frame evidence window ──────
-                            evidence_frames = self.ball_buffer.get_window_frames(
-                                frame_idx, half_window=5
-                            )
-                            evidence_summary = [
-                                {
-                                    'frame': e['frame_idx'],
-                                    'ground': (round(e['ground'][0], 2),
-                                               round(e['ground'][1], 2))
-                                    if e['ground'] else None,
-                                    'px': e['ball_px'],
-                                }
-                                for e in evidence_frames
-                            ]
-
-                            scorer_desc = (
-                                f" | Goal Scored by Team {scoring_team+1} "
-                                f"(Player #{scorer_j}) "
-                                f"| Conceded by Team {conceding_team+1}"
-                            )
-
-                            events.append({
-                                'frame_idx':          frame_idx,
-                                'timestamp':          timestamp_str,
-                                'timestamp_seconds':  timestamp_sec,
-                                'event_type':         'Goal',
-                                'players_involved':   [scorer_id] if scorer_id is not None else [],
-                                'teams_involved':     [scoring_team],
-                                'conceding_team':     conceding_team,
-                                'confidence':         conf,
-                                'goal_side':          goal_side_str,
-                                'description':        desc + scorer_desc,
-                                'evidence_frames':    evidence_summary,
-                                'net_ripple_left':    net_ripple_left,
-                                'net_ripple_right':   net_ripple_right,
-                            })
-
-                            print(
-                                f"\n⚽ [GOAL CONFIRMED] {timestamp_str} "
-                                f"(Frame {frame_idx})\n"
-                                f"   Scoring:   Team {scoring_team+1} | "
-                                f"Player #{scorer_j}\n"
-                                f"   Conceding: Team {conceding_team+1}\n"
-                                f"   Details:   {desc}\n"
-                                f"   Evidence:  {len(evidence_summary)} frames "
-                                f"around goal\n"
-                            )
-                else:
                     self._goal_streak = 0
 
             # ===== 4. Corner Kick Detection =====
