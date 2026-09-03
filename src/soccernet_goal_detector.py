@@ -22,6 +22,7 @@ NOTE: This module is 100% standalone. It does NOT modify main.py or any
 import os
 import sys
 import time
+import importlib
 import importlib.util
 import numpy as np
 import cv2
@@ -92,7 +93,7 @@ class SoccerNetGoalDetector:
         self.replay_merge_seconds = replay_merge_seconds
         self.batch_size = batch_size
 
-        print(f"[SoccerNetGoalDetector] Device: {self.device}")
+        print(f"[SoccerNetGoalDetector v2.0] Device: {self.device}")
         self.model = self._load_model()
 
     def _load_model(self):
@@ -104,17 +105,19 @@ class SoccerNetGoalDetector:
 
         print(f"[SoccerNetGoalDetector] Loading checkpoint: {self.checkpoint_path}")
 
-        # 1. Ensure repo_path is in sys.path
+        # Add repo_path and repo_path/src to sys.path
         if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
+        repo_src = os.path.join(self.repo_path, "src")
+        if repo_src not in sys.path:
+            sys.path.insert(0, repo_src)
 
-        # 2. Import argus FIRST so argus.MODEL_REGISTRY is ready
+        # Import argus framework
         import argus
 
-        # 3. Load all .py files in repo_path/src via spec_from_file_location to populate argus.MODEL_REGISTRY
-        ball_src = os.path.join(self.repo_path, "src")
-        if os.path.exists(ball_src):
-            for root, _, files in os.walk(ball_src):
+        # Load all python files in repo_path/src to register argus models
+        if os.path.exists(repo_src):
+            for root, _, files in os.walk(repo_src):
                 for file in files:
                     if file.endswith(".py") and not file.startswith("__"):
                         full_p = os.path.join(root, file)
@@ -128,33 +131,39 @@ class SoccerNetGoalDetector:
                         except Exception:
                             pass
 
-        print(f"[SoccerNetGoalDetector] Registered Argus models: {list(argus.MODEL_REGISTRY.keys())}")
+        print(f"[SoccerNetGoalDetector] Argus Registry contains: {list(argus.MODEL_REGISTRY.keys())}")
 
-        # 4. Load model using PyTorch Argus framework
+        # Attempt 1: argus.load_model
         try:
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
-            print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
+            print(f"[SoccerNetGoalDetector] ✅ Loaded via argus.load_model")
             return model
-        except Exception as e:
-            print(f"[SoccerNetGoalDetector] argus.load_model notice: {e}")
-            # Fallback manual reconstruction if checkpoint is standard torch file
-            try:
-                chk = torch.load(self.checkpoint_path, map_location=self.device)
-                model_name = chk.get('model_name', 'default') if isinstance(chk, dict) else 'default'
+        except Exception as e1:
+            print(f"[SoccerNetGoalDetector] argus.load_model notice: {e1}")
+
+        # Attempt 2: Load checkpoint dict and instantiate registered Argus model directly with chk['params']
+        try:
+            chk = torch.load(self.checkpoint_path, map_location=self.device)
+            if isinstance(chk, dict) and 'params' in chk:
+                model_name = chk.get('model_name', 'default')
                 model_cls = argus.MODEL_REGISTRY.get(model_name)
                 if model_cls is None and len(argus.MODEL_REGISTRY) > 0:
                     model_cls = list(argus.MODEL_REGISTRY.values())[0]
 
                 if model_cls is not None:
-                    if isinstance(chk, dict) and 'params' in chk:
-                        model = model_cls(chk['params'], device=str(self.device))
-                        model.load_state_dict(chk, strict=False)
-                        print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus model_cls")
-                        return model
+                    model = model_cls(chk['params'], device=str(self.device))
+                    if 'model_state_dict' in chk:
+                        model.load_state_dict(chk['model_state_dict'])
+                    elif 'nn_state_dict' in chk:
+                        model.load_state_dict(chk['nn_state_dict'])
+                    else:
+                        model.load_state_dict(chk)
+                    print(f"[SoccerNetGoalDetector] ✅ Loaded via argus model_cls({model_cls.__name__})")
+                    return model
 
-                raise RuntimeError(f"Could not resolve argus model class: {model_name}")
-            except Exception as e2:
-                raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e2}")
+            raise RuntimeError(f"No valid argus model class registered. Registry: {list(argus.MODEL_REGISTRY.keys())}")
+        except Exception as e2:
+            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e2}")
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
