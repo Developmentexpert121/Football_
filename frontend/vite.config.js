@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://interpreted-slip-wright-lcd.trycloudflare.com',
+        target: 'https://identifies-records-dam-farming.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'https://interpreted-slip-wright-lcd.trycloudflare.com',
+        target: 'https://identifies-records-dam-farming.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
