@@ -300,38 +300,98 @@ def run_pipeline(
         raw_frames=action_frames
     )
 
-    # ── EXCLUSIVE GOAL DETECTION VIA GOALDETECTOR POC REPO ────────────
-    print("\n[Stage 12B/14] Running GoalDetector POC Repo for Exclusive Goal Detection...")
+    # ── GOAL DETECTION PIPELINE (SOCCERNET + GOALDETECTOR POC) ────────────
+    print("\n[Stage 12B/14] Running SoccerNet Goal Detector & POC Engine...")
     try:
-        from src.abhishek_goal_detector import GoalDetector
-        abhishek_gd = GoalDetector(
-            video_path=input_video_path,
-            conf_threshold=cfg.get("detector.confidence_threshold", 0.25),
-            debug_mode=False,
-            visualization=False
-        )
-        detected_poc_goals = abhishek_gd.process_video()
+        import glob
+        import time
+        from src.soccernet_goal_detector import SoccerNetGoalDetector
         
-        # Remove any non-POC goal events and insert POC goals exclusively
-        events = [e for e in events if e.get('event_type') != 'Goal']
-        for g in detected_poc_goals:
-            g_frame = g['frame_number']
-            g_side = g.get('goal_side', 'right')
-            scoring_team = 0 if g_side == 'right' else 1
-            events.append({
-                'frame_idx': g_frame,
-                'timestamp': g['formatted_time'],
-                'timestamp_sec': round(g['timestamp'], 2),
-                'event_type': 'Goal',
-                'goal_side': g_side,
-                'players_involved': [],
-                'teams_involved': [scoring_team],
-                'confidence': 0.95,
-                'description': f"Goal Detected ({g_side.upper()} Net) at {g['formatted_time']} by Team {scoring_team}"
-            })
-        print(f"[Stage 12B] Total Goals Detected exclusively by POC Engine: {len(detected_poc_goals)}")
+        # Discover model weights
+        weights_candidates = glob.glob("weights/**/model*.pth", recursive=True) + \
+                             glob.glob("weights/**/*.pth", recursive=True) + \
+                             glob.glob("/content/weights/**/model*.pth", recursive=True)
+        
+        soccernet_weights = weights_candidates[0] if weights_candidates else "weights/model-019-0.797827.pth"
+        ball_repo_path = "/content/ball-action-spotting" if os.path.exists("/content/ball-action-spotting") else "ball-action-spotting"
+        
+        s_detector = SoccerNetGoalDetector(
+            checkpoint_path=soccernet_weights,
+            repo_path=ball_repo_path,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            gaussian_sigma=3.0,
+            peak_min_height=0.2,
+            peak_min_distance_frames=15,
+            replay_merge_seconds=45.0,
+            batch_size=8
+        )
+        detected_soccernet_goals = s_detector.detect(input_video_path)
+
+        if detected_soccernet_goals:
+            # Remove default goal events and insert SoccerNet goals with team attribution
+            events = [e for e in events if e.get('event_type') != 'Goal']
+            fps = video_info.get('fps', 25.0)
+            
+            for ts_sec, conf in detected_soccernet_goals:
+                g_frame = int(ts_sec * fps)
+                formatted_time = time.strftime('%M:%S', time.gmtime(ts_sec))
+                
+                # Determine goal net side (left vs right) from ball tracking or frame position
+                ball_x = frame_width / 2.0
+                if g_frame in tracks.get('ball', {}):
+                    b_bbox = tracks['ball'][g_frame].get('bbox')
+                    if b_bbox:
+                        ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
+                
+                # Dynamic scoring team: Left net = Team 1 (Away), Right net = Team 0 (Home)
+                if ball_x < (frame_width / 2.0):
+                    g_side = 'left'
+                    scoring_team = 1  # Away Team (Team White / Team B)
+                else:
+                    g_side = 'right'
+                    scoring_team = 0  # Home Team (Team Red / Team A)
+
+                events.append({
+                    'frame_idx': g_frame,
+                    'timestamp': formatted_time,
+                    'timestamp_sec': round(ts_sec, 2),
+                    'event_type': 'Goal',
+                    'goal_side': g_side,
+                    'players_involved': [],
+                    'teams_involved': [scoring_team],
+                    'confidence': round(conf, 2),
+                    'description': f"Goal Scored ({g_side.upper()} Net) at {formatted_time} by Team {'A' if scoring_team == 0 else 'B'}"
+                })
+            print(f"[Stage 12B] Total Confirmed SoccerNet Goals: {len(detected_soccernet_goals)}")
     except Exception as e:
-        print(f"[Stage 12B Warning] GoalDetector POC execution fallback: {e}")
+        print(f"[Stage 12B Warning] SoccerNetGoalDetector fallback to POC: {e}")
+        try:
+            from src.abhishek_goal_detector import GoalDetector
+            abhishek_gd = GoalDetector(
+                video_path=input_video_path,
+                conf_threshold=cfg.get("detector.confidence_threshold", 0.25),
+                debug_mode=False,
+                visualization=False
+            )
+            detected_poc_goals = abhishek_gd.process_video()
+            events = [e for e in events if e.get('event_type') != 'Goal']
+            for g in detected_poc_goals:
+                g_frame = g['frame_number']
+                g_side = g.get('goal_side', 'right')
+                scoring_team = 0 if g_side == 'right' else 1
+                events.append({
+                    'frame_idx': g_frame,
+                    'timestamp': g['formatted_time'],
+                    'timestamp_sec': round(g['timestamp'], 2),
+                    'event_type': 'Goal',
+                    'goal_side': g_side,
+                    'players_involved': [],
+                    'teams_involved': [scoring_team],
+                    'confidence': 0.95,
+                    'description': f"Goal Detected ({g_side.upper()} Net) at {g['formatted_time']} by Team {scoring_team}"
+                })
+        except Exception as e2:
+            print(f"[Stage 12B Fallback Warning] GoalDetector POC fallback: {e2}")
 
     # Build per-frame event index for visualization
     events_by_frame = {}
