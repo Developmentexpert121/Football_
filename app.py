@@ -51,15 +51,23 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 def async_pipeline_worker(job_id: str, input_path: str, output_path: str):
     """
     Executes the 18-stage Football Analytics pipeline in a background worker.
-    Updates job status and progress percentage.
+    Updates job status, progress percentage, and accumulates real-time log entries.
     """
     try:
         def update_progress(stage_name: str, progress_pct: int):
+            t_stamp = time.strftime('%H:%M:%S')
+            log_line = f"[{t_stamp}] [{progress_pct}%] {stage_name}"
+            
+            existing_logs = JOBS.get(job_id, {}).get("logs", [])
+            if not existing_logs or existing_logs[-1] != log_line:
+                existing_logs.append(log_line)
+
             JOBS[job_id] = {
                 "status": "processing",
                 "progress": progress_pct,
                 "stage": stage_name,
-                "input_file": input_path
+                "input_file": input_path,
+                "logs": existing_logs
             }
 
         # Initial state
@@ -74,10 +82,14 @@ def async_pipeline_worker(job_id: str, input_path: str, output_path: str):
         )
 
         output_filename = os.path.basename(output_path)
+        existing_logs = JOBS.get(job_id, {}).get("logs", [])
+        existing_logs.append(f"[{time.strftime('%H:%M:%S')}] [100%] Analysis Complete (18-Stage Pipeline)")
+
         JOBS[job_id] = {
             "status": "completed",
             "progress": 100,
             "stage": "Analysis Complete (18-Stage Pipeline)",
+            "logs": existing_logs,
             "output_video_url": f"/media/videos/{output_filename}",
             "heatmap_url": "/media/reports/heatmap.png",
             "heatmap_team_a_url": "/media/reports/heatmap_team_a.png",
@@ -90,10 +102,13 @@ def async_pipeline_worker(job_id: str, input_path: str, output_path: str):
         import traceback
         print(f"Job {job_id} failed: {e}")
         traceback.print_exc()
+        existing_logs = JOBS.get(job_id, {}).get("logs", [])
+        existing_logs.append(f"[{time.strftime('%H:%M:%S')}] ERROR: {str(e)}")
         JOBS[job_id] = {
             "status": "failed",
             "progress": 0,
-            "stage": f"Error: {str(e)}"
+            "stage": f"Error: {str(e)}",
+            "logs": existing_logs
         }
 
 @app.get("/", response_class=HTMLResponse)
@@ -120,11 +135,13 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     with open(input_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    init_log = f"[{time.strftime('%H:%M:%S')}] [5%] Video Uploaded: {file.filename}. Queued for 18-stage analysis..."
     JOBS[job_id] = {
         "status": "queued",
         "progress": 5,
         "stage": "Uploaded. Queued for 18-stage analysis...",
-        "filename": file.filename
+        "filename": file.filename,
+        "logs": [init_log]
     }
 
     background_tasks.add_task(async_pipeline_worker, job_id, input_path, output_path)

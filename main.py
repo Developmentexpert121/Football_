@@ -302,6 +302,7 @@ def run_pipeline(
 
     # ── GOAL DETECTION PIPELINE (SOCCERNET + GOALDETECTOR POC) ────────────
     print("\n[Stage 12B/14] Running SoccerNet Goal Detector & POC Engine...")
+    if progress_callback: progress_callback("SoccerNet Goal Spotter (15-Class Action AI)", 85)
     try:
         import torch
         import glob
