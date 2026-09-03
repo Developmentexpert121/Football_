@@ -103,58 +103,32 @@ class SoccerNetGoalDetector:
 
         print(f"[SoccerNetGoalDetector] Loading checkpoint: {self.checkpoint_path}")
 
-        # Save sys.path and sys.modules state to isolate ball-action-spotting imports
-        saved_sys_path = list(sys.path)
-        saved_src_module = sys.modules.get('src')
-
-        try:
-            # Prioritize repo_path at index 0 of sys.path
-            sys.path = [p for p in sys.path if p not in [self.repo_path, '/content/Football_']]
+        # Ensure repo_path is in sys.path
+        if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
 
-            # Evict 'src' from sys.modules so Python loads ball-action-spotting's src package
-            for mod in list(sys.modules.keys()):
-                if mod == 'src' or mod.startswith('src.'):
-                    del sys.modules[mod]
+        # Extend 'src' package search path so Python finds both Football_/src AND ball-action-spotting/src
+        repo_src = os.path.join(self.repo_path, "src")
+        if os.path.exists(repo_src):
+            if 'src' in sys.modules and hasattr(sys.modules['src'], '__path__'):
+                if repo_src not in sys.modules['src'].__path__:
+                    sys.modules['src'].__path__.append(repo_src)
 
-            # Import ball-action-spotting model registry to populate argus.MODEL_REGISTRY
-            try:
-                import src.models
-            except Exception as e_mod:
-                print(f"[SoccerNetGoalDetector] Notice loading src.models: {e_mod}")
+        # Pre-import ball-action-spotting model definitions to register 'default' model in argus
+        try:
+            import src.models
+        except Exception as e_mod:
+            print(f"[SoccerNetGoalDetector] Notice pre-loading src.models: {e_mod}")
 
+        # Load model using PyTorch Argus framework
+        try:
             import argus
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
             print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
             return model
-
         except Exception as e:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e}")
-            # Fallback PyTorch direct state dict load
-            try:
-                import argus
-                checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
-                if isinstance(checkpoint, dict) and 'model' in checkpoint:
-                    model = checkpoint['model']
-                elif isinstance(checkpoint, dict) and 'params' in checkpoint:
-                    params = checkpoint['params']
-                    model_cls = argus.MODEL_REGISTRY.get('default')
-                    model = model_cls(params)
-                    if 'model_state_dict' in checkpoint:
-                        model.load_state_dict(checkpoint['model_state_dict'])
-                else:
-                    raise RuntimeError(f"Unknown checkpoint structure: {type(checkpoint)}")
-                
-                print(f"[SoccerNetGoalDetector] ✅ Model loaded via fallback argus registry")
-                return model
-            except Exception as e2:
-                raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e2}")
-
-        finally:
-            # Restore sys.path and sys.modules
-            sys.path = saved_sys_path
-            if saved_src_module is not None:
-                sys.modules['src'] = saved_src_module
+            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load model checkpoint: {e}")
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
