@@ -91,7 +91,7 @@ class SoccerNetGoalDetector:
         self.replay_merge_seconds = replay_merge_seconds
         self.batch_size = batch_size
 
-        print(f"[SoccerNetGoalDetector v2.2] Device: {self.device}")
+        print(f"[SoccerNetGoalDetector v2.3] Device: {self.device}")
         self.model = self._load_model()
 
     def _load_model(self):
@@ -101,7 +101,7 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v2.2] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v2.3] Loading checkpoint: {self.checkpoint_path}")
 
         # Ensure repo_path and repo_path/src are in sys.path
         if self.repo_path not in sys.path:
@@ -112,7 +112,7 @@ class SoccerNetGoalDetector:
 
         import argus
 
-        # Load all python files in repo_path/src to register argus models
+        # Import all .py modules in repo_path/src so Argus models register
         if os.path.exists(repo_src):
             for root, _, files in os.walk(repo_src):
                 for file in files:
@@ -128,37 +128,26 @@ class SoccerNetGoalDetector:
                         except Exception:
                             pass
 
-        # Load model using PyTorch Argus framework
+        # Method 1: Direct instantiation via BallActionModel class
+        try:
+            from src.argus_models import BallActionModel
+            chk = torch.load(self.checkpoint_path, map_location=self.device)
+            params = chk['params'] if isinstance(chk, dict) and 'params' in chk else chk
+            model = BallActionModel(params, device=str(self.device))
+            if isinstance(chk, dict) and 'model_state_dict' in chk:
+                model.load_state_dict(chk['model_state_dict'])
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via BallActionModel ({len(SOCCERNET_CLASSES)} classes)")
+            return model
+        except Exception as e_direct:
+            print(f"[SoccerNetGoalDetector] Direct BallActionModel notice: {e_direct}")
+
+        # Method 2: argus.load_model fallback
         try:
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
-            print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model")
             return model
-        except Exception as e1:
-            print(f"[SoccerNetGoalDetector] argus.load_model notice: {e1}")
-
-        try:
-            chk = torch.load(self.checkpoint_path, map_location=self.device)
-            model_reg = getattr(argus, 'MODEL_REGISTRY', getattr(getattr(argus, 'model', None), 'MODEL_REGISTRY', {}))
-            if isinstance(chk, dict) and 'params' in chk:
-                model_name = chk.get('model_name', 'default')
-                model_cls = model_reg.get(model_name)
-                if model_cls is None and len(model_reg) > 0:
-                    model_cls = list(model_reg.values())[0]
-
-                if model_cls is not None:
-                    model = model_cls(chk['params'], device=str(self.device))
-                    if 'model_state_dict' in chk:
-                        model.load_state_dict(chk['model_state_dict'])
-                    elif 'nn_state_dict' in chk:
-                        model.load_state_dict(chk['nn_state_dict'])
-                    else:
-                        model.load_state_dict(chk)
-                    print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus model_cls({model_cls.__name__})")
-                    return model
-
-            raise RuntimeError(f"Could not load checkpoint: {e1}")
-        except Exception as e2:
-            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e2}")
+        except Exception as e_argus:
+            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_argus}")
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
