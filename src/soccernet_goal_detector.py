@@ -60,9 +60,7 @@ GOAL_CLASS_INDEX = 2        # Index of Goal in SOCCERNET_CLASSES
 # Model input parameters from README + action_sampling_weights_002 config
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 736
-FRAMES_PER_STACK = 3        # 3 grayscale frames stacked as channels
-STACKS_PER_SEQUENCE = 5     # 5 stacks = 15 frames total per forward pass
-SEQUENCE_LENGTH = FRAMES_PER_STACK * STACKS_PER_SEQUENCE  # = 15
+SEQUENCE_LENGTH = 15        # 15 consecutive 1280x736 grayscale frames
 EFFECTIVE_FPS = 12.5         # Skip every 2nd frame from 25 FPS source
 
 
@@ -93,7 +91,7 @@ class SoccerNetGoalDetector:
         self.replay_merge_seconds = replay_merge_seconds
         self.batch_size = batch_size
 
-        print(f"[SoccerNetGoalDetector v2.1] Device: {self.device}")
+        print(f"[SoccerNetGoalDetector v2.2] Device: {self.device}")
         self.model = self._load_model()
 
     def _load_model(self):
@@ -103,7 +101,7 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v2.1] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v2.2] Loading checkpoint: {self.checkpoint_path}")
 
         # Ensure repo_path and repo_path/src are in sys.path
         if self.repo_path not in sys.path:
@@ -130,7 +128,7 @@ class SoccerNetGoalDetector:
                         except Exception:
                             pass
 
-        # Attempt 1: argus.load_model
+        # Load model using PyTorch Argus framework
         try:
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
             print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
@@ -138,7 +136,6 @@ class SoccerNetGoalDetector:
         except Exception as e1:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e1}")
 
-        # Attempt 2: Load checkpoint dict and instantiate registered Argus model directly with chk['params']
         try:
             chk = torch.load(self.checkpoint_path, map_location=self.device)
             model_reg = getattr(argus, 'MODEL_REGISTRY', getattr(getattr(argus, 'model', None), 'MODEL_REGISTRY', {}))
@@ -188,6 +185,10 @@ class SoccerNetGoalDetector:
         return frames, source_fps, skip_n
 
     def _build_input_tensors(self, frames):
+        """
+        Build (15, 736, 1280) sequence tensors per frame.
+        Batched into shape (B, 15, 736, 1280) as required by MultiDimStacker.forward_2d(x).
+        """
         sequences = []
         num_frames = len(frames)
         norm_frames = [f.astype(np.float32) / 255.0 for f in frames]
@@ -196,12 +197,9 @@ class SoccerNetGoalDetector:
         for center in range(num_frames):
             indices = [min(max(center + offset, 0), num_frames - 1)
                        for offset in range(-half_seq, half_seq + 1)]
-            stacks = []
-            for s in range(STACKS_PER_SEQUENCE):
-                stack_frames = [norm_frames[indices[s * FRAMES_PER_STACK + c]]
-                                for c in range(FRAMES_PER_STACK)]
-                stacks.append(np.stack(stack_frames, axis=0))  # (3, H, W)
-            sequence = np.stack(stacks, axis=0)  # (5, 3, H, W)
+            # Stack 15 frames directly as (15, H, W)
+            seq_frames = [norm_frames[idx] for idx in indices]
+            sequence = np.stack(seq_frames, axis=0)  # (15, 736, 1280)
             sequences.append(torch.from_numpy(sequence))
         return sequences
 
