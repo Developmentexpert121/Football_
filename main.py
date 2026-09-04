@@ -355,14 +355,15 @@ def run_pipeline(
                 formatted_time = time.strftime('%M:%S', time.gmtime(ts_sec))
                 
                 # Determine goal net side (left vs right) from ball tracking or frame position
-                ball_x = frame_width / 2.0
+                frame_w_val = getattr(video_io, 'width', 1280)
+                ball_x = frame_w_val / 2.0
                 if g_frame in tracks.get('ball', {}):
                     b_bbox = tracks['ball'][g_frame].get('bbox')
                     if b_bbox:
                         ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
                 
                 # Dynamic scoring team: Left net = Team 1 (Away), Right net = Team 0 (Home)
-                if ball_x < (frame_width / 2.0):
+                if ball_x < (frame_w_val / 2.0):
                     g_side = 'left'
                     scoring_team = 1  # Away Team (Team White / Team B)
                 else:
