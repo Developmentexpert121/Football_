@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://ranger-webcast-luke-satin.trycloudflare.com',
+        target: 'https://cheaper-til-consortium-stevens.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'https://ranger-webcast-luke-satin.trycloudflare.com',
+        target: 'https://cheaper-til-consortium-stevens.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
