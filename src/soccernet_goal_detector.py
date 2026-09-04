@@ -1,4 +1,4 @@
-﻿"""
+"""
 SoccerNet Goal Detector — Standalone Module (goal-improve branch)
 ================================================================
 Integrates the pretrained action_sampling_weights_002 model from:
@@ -101,33 +101,44 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v2.5] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v3.0] Loading checkpoint: {self.checkpoint_path}")
 
-        # Save sys.modules state for 'src'
-        saved_modules = {}
-        for k in list(sys.modules.keys()):
-            if k == 'src' or k.startswith('src.'):
-                saved_modules[k] = sys.modules.pop(k)
+        # 1. Resolve ball-action-spotting source directory and Football_ source directory
+        ball_src = os.path.join(self.repo_path, "src")
+        football_src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 
-        saved_sys_path = list(sys.path)
-
-        try:
-            # Place ball-action-spotting at index 0 of sys.path
-            sys.path = [p for p in sys.path if p not in [self.repo_path, '/content/Football_']]
+        # 2. Add repo and repo_src at top of sys.path
+        if self.repo_path not in sys.path:
             sys.path.insert(0, self.repo_path)
+        if ball_src not in sys.path:
+            sys.path.insert(0, ball_src)
 
-            # Import ball-action-spotting modules cleanly
+        # 3. Create synthetic namespace module for 'src' containing BOTH ball_src and football_src
+        import types
+        src_ns = types.ModuleType("src")
+        src_ns.__path__ = [ball_src, football_src]
+        src_ns.__package__ = "src"
+
+        # Remove stale cached src.* submodules from sys.modules
+        for k in list(sys.modules.keys()):
+            if k.startswith("src."):
+                del sys.modules[k]
+
+        sys.modules['src'] = src_ns
+
+        import argus
+
+        # 4. Explicitly load ball-action-spotting submodules into 'src'
+        try:
             import src.models.multidim_stacker
             import src.losses
             import src.mixup
             import src.argus_models
             from src.argus_models import BallActionModel
 
-            import argus
             model = argus.load_model(self.checkpoint_path, device=str(self.device))
             print(f"[SoccerNetGoalDetector] ✅ Model loaded via argus.load_model ({len(SOCCERNET_CLASSES)} classes)")
             return model
-
         except Exception as e_argus:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e_argus}")
             try:
@@ -141,12 +152,10 @@ class SoccerNetGoalDetector:
                 return model
             except Exception as e_direct:
                 raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_direct}")
-
         finally:
-            # Restore sys.path and sys.modules for Football_
-            sys.path = saved_sys_path
-            for k, v in saved_modules.items():
-                sys.modules[k] = v
+            if hasattr(sys.modules.get('src'), '__path__'):
+                if football_src not in sys.modules['src'].__path__:
+                    sys.modules['src'].__path__.append(football_src)
 
     def _preprocess_video(self, video_path: str):
         if not os.path.exists(video_path):
