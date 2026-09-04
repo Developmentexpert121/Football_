@@ -167,7 +167,11 @@ class SoccerNetGoalDetector:
 
         # 5. Method 2: Direct MultiDimStacker PyTorch loader (Independent of argus package!)
         try:
-            chk = torch.load(self.checkpoint_path, map_location=self.device)
+            try:
+                chk = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
+            except TypeError:
+                chk = torch.load(self.checkpoint_path, map_location=self.device)
+
             params = chk.get('params', {}) if isinstance(chk, dict) else {}
 
             # Dynamically import MultiDimStacker
