@@ -101,11 +101,35 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v3.1] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v3.2] Loading checkpoint: {self.checkpoint_path}")
 
-        # 1. Resolve ball-action-spotting source directory and Football_ source directory
+        # 1. Resolve ball-action-spotting repository directory across all possible paths
+        repo_candidates = [
+            self.repo_path,
+            "/content/ball-action-spotting",
+            "/content/Football_/ball-action-spotting",
+            os.path.abspath("ball-action-spotting"),
+            os.path.abspath("../ball-action-spotting"),
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ball-action-spotting"),
+        ]
+        
+        actual_repo = None
+        for candidate in repo_candidates:
+            if candidate and os.path.exists(os.path.join(candidate, "src", "models", "multidim_stacker.py")):
+                actual_repo = candidate
+                break
+
+        if not actual_repo:
+            print("[SoccerNetGoalDetector] Auto-cloning ball-action-spotting repository...")
+            clone_target = "/content/ball-action-spotting" if os.path.exists("/content") else "ball-action-spotting"
+            import subprocess
+            subprocess.run(["git", "clone", "https://github.com/lRomul/ball-action-spotting", clone_target], check=False)
+            actual_repo = clone_target
+
+        self.repo_path = actual_repo
         ball_src = os.path.join(self.repo_path, "src")
         football_src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+        print(f"[SoccerNetGoalDetector v3.2] Resolved Repo Path: {self.repo_path}")
 
         # 2. Add repo and repo_src at top of sys.path
         if self.repo_path not in sys.path:
