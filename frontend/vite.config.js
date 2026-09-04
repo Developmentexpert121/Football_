@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'https://portal-buf-harley-dig.trycloudflare.com',
+        target: 'https://ranger-webcast-luke-satin.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
@@ -26,7 +26,7 @@ export default defineConfig({
         }
       },
       '/media': {
-        target: 'https://portal-buf-harley-dig.trycloudflare.com',
+        target: 'https://ranger-webcast-luke-satin.trycloudflare.com',
         changeOrigin: true,
         secure: false,
         timeout: 600000,
