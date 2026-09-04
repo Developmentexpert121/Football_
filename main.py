@@ -357,10 +357,23 @@ def run_pipeline(
                 # Determine goal net side (left vs right) from ball tracking or frame position
                 frame_w_val = getattr(video_io, 'width', 1280)
                 ball_x = frame_w_val / 2.0
-                if g_frame in tracks.get('ball', {}):
-                    b_bbox = tracks['ball'][g_frame].get('bbox')
-                    if b_bbox:
-                        ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
+                ball_tracks = tracks.get('ball', [])
+                if isinstance(ball_tracks, dict) and g_frame in ball_tracks:
+                    b_obj = ball_tracks[g_frame]
+                    if isinstance(b_obj, list) and len(b_obj) > 0 and isinstance(b_obj[0], dict):
+                        b_bbox = b_obj[0].get('bbox')
+                        if b_bbox: ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
+                    elif isinstance(b_obj, dict):
+                        b_bbox = b_obj.get('bbox')
+                        if b_bbox: ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
+                elif isinstance(ball_tracks, list) and 0 <= g_frame < len(ball_tracks):
+                    b_obj = ball_tracks[g_frame]
+                    if isinstance(b_obj, list) and len(b_obj) > 0 and isinstance(b_obj[0], dict):
+                        b_bbox = b_obj[0].get('bbox')
+                        if b_bbox: ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
+                    elif isinstance(b_obj, dict):
+                        b_bbox = b_obj.get('bbox')
+                        if b_bbox: ball_x = (b_bbox[0] + b_bbox[2]) / 2.0
                 
                 # Dynamic scoring team: Left net = Team 1 (Away), Right net = Team 0 (Home)
                 if ball_x < (frame_w_val / 2.0):
