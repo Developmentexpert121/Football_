@@ -349,7 +349,7 @@ def run_pipeline(
         events = [e for e in events if e.get('event_type') != 'Goal']
 
         if detected_soccernet_goals:
-            fps = video_info.get('fps', 25.0)
+            fps = getattr(video_io, 'fps', 25.0)
             for ts_sec, conf in detected_soccernet_goals:
                 g_frame = int(ts_sec * fps)
                 formatted_time = time.strftime('%M:%S', time.gmtime(ts_sec))
@@ -384,34 +384,7 @@ def run_pipeline(
         else:
             print("[Stage 12B] SoccerNet Goal Detector confirmed 0 goals for this clip.")
     except Exception as e:
-        print(f"[Stage 12B Warning] SoccerNetGoalDetector fallback to POC: {e}")
-        try:
-            from src.abhishek_goal_detector import GoalDetector
-            abhishek_gd = GoalDetector(
-                video_path=input_video_path,
-                conf_threshold=cfg.get("detector.confidence_threshold", 0.25),
-                debug_mode=False,
-                visualization=False
-            )
-            detected_poc_goals = abhishek_gd.process_video()
-            events = [e for e in events if e.get('event_type') != 'Goal']
-            for g in detected_poc_goals:
-                g_frame = g['frame_number']
-                g_side = g.get('goal_side', 'right')
-                scoring_team = 0 if g_side == 'right' else 1
-                events.append({
-                    'frame_idx': g_frame,
-                    'timestamp': g['formatted_time'],
-                    'timestamp_sec': round(g['timestamp'], 2),
-                    'event_type': 'Goal',
-                    'goal_side': g_side,
-                    'players_involved': [],
-                    'teams_involved': [scoring_team],
-                    'confidence': 0.95,
-                    'description': f"Goal Detected ({g_side.upper()} Net) at {g['formatted_time']} by Team {scoring_team}"
-                })
-        except Exception as e2:
-            print(f"[Stage 12B Fallback Warning] GoalDetector POC fallback: {e2}")
+        print(f"[Stage 12B Warning] SoccerNetGoalDetector error: {e}")
 
     # Build per-frame event index for visualization
     events_by_frame = {}
