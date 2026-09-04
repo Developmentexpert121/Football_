@@ -100,18 +100,34 @@ export default function MatchAnalysis() {
   }
 
   useEffect(() => {
-    // Check if match is already cached in localStorage
-    const matches = getStoredMatches()
-    const found = matches.find(m => m.jobId === jobId)
-    
-    if (found && found.status === 'completed') {
-      setMatchData(found)
-      setIsProcessing(false)
-      return
+    let isMounted = true
+
+    const fetchFreshData = async () => {
+      try {
+        const res = await fetch(`/api/results/${jobId}`)
+        if (res.ok) {
+          const fullResults = await res.json()
+          const matchRecord = {
+            jobId,
+            filename: fullResults.filename || `Match_${jobId}`,
+            date: new Date().toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }),
+            status: 'completed',
+            ...fullResults
+          }
+          if (isMounted) {
+            setMatchData(matchRecord)
+            saveMatch(matchRecord)
+            setIsProcessing(false)
+          }
+          return true
+        }
+      } catch (e) {
+        console.error("Failed to fetch fresh results:", e)
+      }
+      return false
     }
 
-    // Otherwise poll status from backend
-    let isMounted = true
+    // Check backend status or load fresh data immediately
     const pollTimer = setInterval(async () => {
       try {
         const statusRes = await fetch(`/api/status/${jobId}`)
@@ -125,7 +141,7 @@ export default function MatchAnalysis() {
 
         if (statusData.status === 'completed') {
           clearInterval(pollTimer)
-          await loadCompletedData()
+          await fetchFreshData()
         } else if (statusData.status === 'failed') {
           clearInterval(pollTimer)
           setIsProcessing(false)
@@ -135,6 +151,8 @@ export default function MatchAnalysis() {
         console.warn("Status poll hitch:", err)
       }
     }, 1500)
+
+    fetchFreshData()
 
     return () => {
       isMounted = false
