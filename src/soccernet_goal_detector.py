@@ -177,9 +177,20 @@ class SoccerNetGoalDetector:
             spec.loader.exec_module(stacker_mod)
             MultiDimStacker = stacker_mod.MultiDimStacker
 
-            # Extract model parameters
+            # Extract model parameters cleanly from Argus params structure (tuple or dict)
             nn_params = params.get('nn_module', {})
-            model_kwargs = nn_params.get('params', {}) if isinstance(nn_params, dict) else {}
+            if isinstance(nn_params, (list, tuple)) and len(nn_params) >= 2:
+                model_kwargs = nn_params[1]
+            elif isinstance(nn_params, dict):
+                model_kwargs = nn_params.get('params', nn_params)
+            else:
+                model_kwargs = {}
+
+            # Ensure model_name and num_classes fallbacks exist
+            if 'model_name' not in model_kwargs:
+                model_kwargs['model_name'] = 'tf_efficientnetv2_b0.in21k_ft_in1k'
+            if 'num_classes' not in model_kwargs:
+                model_kwargs['num_classes'] = len(SOCCERNET_CLASSES)
 
             # Build PyTorch model instance directly
             model_instance = MultiDimStacker(**model_kwargs)
