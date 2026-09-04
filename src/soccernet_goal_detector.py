@@ -101,7 +101,7 @@ class SoccerNetGoalDetector:
                 "Download from: https://drive.google.com/drive/folders/1mIu62cIdsRn3W4o1E5vRR8V5Q1B6HHoz"
             )
 
-        print(f"[SoccerNetGoalDetector v3.0] Loading checkpoint: {self.checkpoint_path}")
+        print(f"[SoccerNetGoalDetector v3.1] Loading checkpoint: {self.checkpoint_path}")
 
         # 1. Resolve ball-action-spotting source directory and Football_ source directory
         ball_src = os.path.join(self.repo_path, "src")
@@ -126,10 +126,9 @@ class SoccerNetGoalDetector:
 
         sys.modules['src'] = src_ns
 
-        import argus
-
-        # 4. Explicitly load ball-action-spotting submodules into 'src'
+        # 4. Method 1: Try argus.load_model
         try:
+            import argus
             import src.models.multidim_stacker
             import src.losses
             import src.mixup
@@ -141,17 +140,51 @@ class SoccerNetGoalDetector:
             return model
         except Exception as e_argus:
             print(f"[SoccerNetGoalDetector] argus.load_model notice: {e_argus}")
-            try:
-                from src.argus_models import BallActionModel
-                chk = torch.load(self.checkpoint_path, map_location=self.device)
-                params = chk['params'] if isinstance(chk, dict) and 'params' in chk else chk
-                model = BallActionModel(params, device=str(self.device))
-                if isinstance(chk, dict) and 'model_state_dict' in chk:
-                    model.load_state_dict(chk['model_state_dict'])
-                print(f"[SoccerNetGoalDetector] ✅ Model loaded via direct BallActionModel")
-                return model
-            except Exception as e_direct:
-                raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_direct}")
+
+        # 5. Method 2: Direct MultiDimStacker PyTorch loader (Independent of argus package!)
+        try:
+            chk = torch.load(self.checkpoint_path, map_location=self.device)
+            params = chk.get('params', {}) if isinstance(chk, dict) else {}
+
+            # Dynamically import MultiDimStacker
+            stacker_file = os.path.join(self.repo_path, "src", "models", "multidim_stacker.py")
+            spec = importlib.util.spec_from_file_location("multidim_stacker_mod", stacker_file)
+            stacker_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(stacker_mod)
+            MultiDimStacker = stacker_mod.MultiDimStacker
+
+            # Extract model parameters
+            nn_params = params.get('nn_module', {})
+            model_kwargs = nn_params.get('params', {}) if isinstance(nn_params, dict) else {}
+
+            # Build PyTorch model instance directly
+            model_instance = MultiDimStacker(**model_kwargs)
+
+            # Extract state dict weights
+            raw_state = chk.get('model_state_dict', chk.get('nn_state_dict', chk)) if isinstance(chk, dict) else chk
+            clean_state = {}
+            for k, v in raw_state.items():
+                new_k = k.replace('model.nn_module.', '').replace('nn_module.', '').replace('model.', '')
+                clean_state[new_k] = v
+
+            model_instance.load_state_dict(clean_state, strict=False)
+            model_instance.to(self.device)
+            model_instance.eval()
+
+            # Wrap in simple predictor interface
+            class StandaloneModelWrapper:
+                def __init__(self, nn_mod):
+                    self.nn_module = nn_mod
+                def predict(self, batch_tensor):
+                    self.nn_module.eval()
+                    with torch.no_grad():
+                        logits = self.nn_module(batch_tensor)
+                        return torch.sigmoid(logits)
+
+            print(f"[SoccerNetGoalDetector] ✅ Model loaded via direct PyTorch MultiDimStacker ({len(SOCCERNET_CLASSES)} classes)")
+            return StandaloneModelWrapper(model_instance)
+        except Exception as e_direct:
+            raise RuntimeError(f"[SoccerNetGoalDetector] Failed to load checkpoint: {e_direct}")
         finally:
             if hasattr(sys.modules.get('src'), '__path__'):
                 if football_src not in sys.modules['src'].__path__:
